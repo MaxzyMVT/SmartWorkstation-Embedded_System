@@ -31,3 +31,44 @@ means unavailable, not a measured empty battery. Add a documented ADC divider
 and calibration before reporting a real voltage. Sitting time starts after
 boot debounce and includes debounce latency at transitions (about 40 ms per
 transition), not time spent booting.
+
+## Network configuration and E4
+
+Copy `.env.example` to `.env` and fill in the Wi-Fi and local gateway broker
+settings before building/flashing. Empty defaults compile with networking
+disabled. The loader accepts `KEY=value`, matching optional quotes, and
+full-line `#` comments. It does not expand escapes, variables, or inline
+comments. Process environment variables override `.env`. Generated headers
+live under ignored `.pio/`; firmware binaries contain credentials and must
+be kept private. No real credentials belong in tracked files.
+
+Publish to `smart_workstation/node1` at 1 Hz and on accepted transitions,
+QoS 1, no retain:
+
+```json
+{"node_id":"node1","presence":1,"sitting_duration_min":14.5,"battery_mv":0,"seq":102}
+```
+
+The timer produces snapshots into a 120-packet FreeRTOS FIFO. Only the
+telemetry task consumes it, and only after matching the MQTT packet ID in
+PUBACK. ESP-MQTT retries unacknowledged packets every 5 seconds and reconnects
+automatically. If the library outbox expires a packet, the application
+re-enqueues the unchanged queue head. At most one message is in flight;
+recovery drains up to 10 packets/second. Wi-Fi reconnection attempts are
+spaced 10 seconds apart; sampling and timing never wait for networking.
+
+A full queue drops the newest snapshot and logs its sequence. Existing
+packets, including the unacknowledged head, remain intact. `seq` advances
+even for dropped snapshots and wraps at 32 bits. QoS 1 may deliver duplicates;
+consumers should deduplicate sequences within a boot session. Backlogged
+packets are historical; the required schema has no sample timestamp.
+Power loss clears the RAM queue and restarts the sequence and sitting total.
+
+PUBACK proves broker receipt, not processing by the Python gateway or cloud
+persistence. The current gateway has no application ACK. Run the broker on
+the gateway for the node-to-gateway reliability demo. The node uses local
+MQTT/TCP; the course rubric makes encryption optional on this link and
+requires E5 TLS/authentication on the gateway-to-cloud link.
+See the [Espressif MQTT reference](https://docs.espressif.com/projects/esp-idf/en/v4.4/esp32/api-reference/protocols/mqtt.html).
+
+Loader checks: `python -m unittest discover -s test -p test_load_config.py`.
