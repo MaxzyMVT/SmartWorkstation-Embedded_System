@@ -1,4 +1,9 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <mqtt_client.h>
+#include <freertos/event_groups.h>
+#include "TelemetryBuffer.h"
+#include "node2_config.h"
 #include <cmath>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -19,6 +24,24 @@ constexpr uint32_t kTempPeriodMs = 2500;
 struct Reading { float value; uint32_t sampledMs; };
 QueueHandle_t soundQueue;
 QueueHandle_t tempQueue;
+QueueHandle_t ackQueue;
+EventGroupHandle_t mqttEvents;
+constexpr EventBits_t kConnected = BIT0;
+constexpr char kTopic[] = "smart_workstation/node2";
+TelemetryBuffer<120> backlog; // Two minutes at 1 Hz; RAM only.
+
+// MQTT callbacks run in the library task. Only pass state through RTOS objects.
+void onMqttEvent(void *, esp_event_base_t, int32_t eventId, void *data) {
+  auto *event = static_cast<esp_mqtt_event_t *>(data);
+  if (eventId == MQTT_EVENT_CONNECTED) {
+    xEventGroupSetBits(mqttEvents, kConnected);
+  } else if (eventId == MQTT_EVENT_DISCONNECTED) {
+    xEventGroupClearBits(mqttEvents, kConnected);
+  } else if (eventId == MQTT_EVENT_PUBLISHED) {
+    // One outstanding message: this mailbox cannot lose a different valid ACK.
+    xQueueOverwrite(ackQueue, &event->msg_id);
+  }
+}
 
 // Relative peak-to-peak estimate, NOT calibrated SPL or A-weighted dBA.
 #ifndef NODE2_SOUND_REFERENCE_COUNTS
@@ -80,13 +103,89 @@ void vTaskTempSample(void *) {
 }
 
 void vTaskMqttDispatch(void *) {
+  esp_mqtt_client_handle_t client = nullptr;
+  const bool configured = NODE2_WIFI_SSID[0] && NODE2_MQTT_BROKER_HOST[0];
+  if (configured) {
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(NODE2_WIFI_SSID, NODE2_WIFI_PASSWORD);
+    esp_mqtt_client_config_t config{};
+    config.host = NODE2_MQTT_BROKER_HOST;
+    config.port = NODE2_MQTT_BROKER_PORT;
+    config.transport = MQTT_TRANSPORT_OVER_TCP; // Local gateway; cloud TLS is gateway-owned.
+    config.username = NODE2_MQTT_USERNAME[0] ? NODE2_MQTT_USERNAME : nullptr;
+    config.password = NODE2_MQTT_PASSWORD[0] ? NODE2_MQTT_PASSWORD : nullptr;
+    config.keepalive = 15;
+    config.reconnect_timeout_ms = 5000;
+    config.network_timeout_ms = 2000;
+    config.message_retransmit_timeout = 5000;
+    client = esp_mqtt_client_init(&config);
+    if (!client) abort();
+    ESP_ERROR_CHECK(esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, onMqttEvent, nullptr));
+    ESP_ERROR_CHECK(esp_mqtt_client_start(client));
+  } else {
+    Serial.println("Network disabled: configure Node2/.env and rebuild");
+  }
+  uint32_t seq = 0, dropped = 0;
+  uint32_t lastSample = millis(), lastWifiRetry = millis(), sentAt = 0;
+  uint32_t lastEnqueueAttempt = millis() - 1000;
+  int pendingId = -1;
+  TickType_t lastWake = xTaskGetTickCount();
   for (;;) {
-    Reading sound{}, temp{};
-    if (xQueuePeek(soundQueue, &sound, 0) == pdTRUE &&
-        xQueuePeek(tempQueue, &temp, 0) == pdTRUE && isfinite(temp.value)) {
-      Serial.printf("temp_c=%.2f sound_db_estimate=%.2f\n", temp.value, sound.value);
+    const uint32_t now = millis();
+    if (now - lastSample >= 1000) {
+      lastSample += 1000;
+      Reading sound{}, temp{};
+      if (xQueuePeek(soundQueue, &sound, 0) == pdTRUE &&
+          xQueuePeek(tempQueue, &temp, 0) == pdTRUE &&
+          isfinite(temp.value) && isfinite(sound.value) &&
+          millis() - temp.sampledMs <= 6000 && millis() - sound.sampledMs <= 1000) {
+        const Telemetry packet{temp.value, sound.value, ++seq};
+        if (!backlog.push(packet)) {
+          Serial.printf("Buffer full: dropped newest seq=%lu total=%lu\n",
+                        static_cast<unsigned long>(seq), static_cast<unsigned long>(++dropped));
+        }
+      }
     }
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    if (configured && WiFi.status() != WL_CONNECTED && now - lastWifiRetry >= 10000) {
+      lastWifiRetry = now;
+      WiFi.reconnect(); // Bounded attempts; no loop waiting for connectivity.
+    }
+    int acknowledgedId;
+    if (xQueueReceive(ackQueue, &acknowledgedId, 0) == pdTRUE &&
+        pendingId >= 0 && acknowledgedId == pendingId && backlog.front()) {
+      const uint32_t acknowledgedSeq = backlog.front()->seq;
+      backlog.acknowledge(acknowledgedSeq);
+      pendingId = -1;
+      Serial.printf("PUBACK seq=%lu queued=%u\n", static_cast<unsigned long>(acknowledgedSeq),
+                    static_cast<unsigned>(backlog.size()));
+    }
+    // ESP-MQTT resends QoS 1 packets after 5 s and on reconnect. If its outbox
+    // expires a packet (or an ACK event is lost), re-enqueue the SAME seq.
+    // Never grow the library outbox with repeated copies during an outage.
+    if (client && pendingId >= 0 && now - sentAt >= 30000 &&
+        esp_mqtt_client_get_outbox_size(client) == 0) {
+      pendingId = -1;
+      Serial.println("Retrying unacknowledged head after outbox expiry");
+    }
+    if (client && pendingId < 0 && backlog.front() &&
+        (xEventGroupGetBits(mqttEvents) & kConnected) &&
+        now - lastEnqueueAttempt >= 100) {
+      lastEnqueueAttempt = now;
+      const auto &packet = *backlog.front();
+      char payload[160];
+      const int length = snprintf(payload, sizeof(payload),
+          "{\"node_id\":\"node2\",\"temp_c\":%.2f,\"sound_db\":%.2f,\"seq\":%lu}",
+          packet.tempC, packet.soundDb, static_cast<unsigned long>(packet.seq));
+      if (length > 0 && static_cast<size_t>(length) < sizeof(payload)) {
+        // Queue network work in the library task so sampling continues offline.
+        pendingId = esp_mqtt_client_enqueue(client, kTopic, payload, length, 1, 0, true);
+        if (pendingId >= 0) sentAt = now;
+        else Serial.println("MQTT enqueue failed; retaining head for retry");
+      }
+    }
+    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(20));
   }
 }
 } // namespace
@@ -95,7 +194,9 @@ void setup() {
   Serial.begin(115200);
   soundQueue = xQueueCreate(1, sizeof(Reading));
   tempQueue = xQueueCreate(1, sizeof(Reading));
-  if (!soundQueue || !tempQueue) abort();
+  ackQueue = xQueueCreate(1, sizeof(int));
+  mqttEvents = xEventGroupCreate();
+  if (!soundQueue || !tempQueue || !ackQueue || !mqttEvents) abort();
   // Highest application priority for sound, lowest for slow temperature reads.
   // Sound runs away from networking and temperature to reduce sampling jitter.
   if (xTaskCreatePinnedToCore(vTaskSoundSample, "sound", 4096, nullptr, 3, nullptr, 1) != pdPASS ||
