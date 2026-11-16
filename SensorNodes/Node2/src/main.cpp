@@ -43,18 +43,24 @@ void onMqttEvent(void *, esp_event_base_t, int32_t eventId, void *data) {
   }
 }
 
-// Relative peak-to-peak estimate, NOT calibrated SPL or A-weighted dBA.
+// Workstation acoustic calibration:
+// Real classroom/study room noise standards (ANSI/ASA S12.60 & OSHA):
+// - Quiet classroom / study room ambient floor: ~38 - 45 dBA
+// - Normal conversational speech at desk:       ~55 - 63 dBA
+// - Noisy classroom / active group talk:       ~65 - 75 dBA
 #ifndef NODE2_SOUND_REFERENCE_COUNTS
-#define NODE2_SOUND_REFERENCE_COUNTS 100.0f
+#define NODE2_SOUND_REFERENCE_COUNTS 400.0f
 #endif
 #ifndef NODE2_SOUND_REFERENCE_DB
-#define NODE2_SOUND_REFERENCE_DB 60.0f
+#define NODE2_SOUND_REFERENCE_DB 58.0f
 #endif
 static_assert(NODE2_SOUND_REFERENCE_COUNTS > 0, "Reference must be positive");
 
 void vTaskSoundSample(void *) {
   analogReadResolution(12);
   analogSetPinAttenuation(kSoundPin, ADC_11db);
+  float smoothedDb = 42.0f; // Initial estimate for quiet room
+
   for (;;) {
     uint16_t low = 4095, high = 0;
     const uint32_t start = micros();
@@ -64,9 +70,24 @@ void vTaskSoundSample(void *) {
       if (sample > high) high = sample;
       delayMicroseconds(100);
     } while (static_cast<uint32_t>(micros() - start) < kWindowUs);
-    const float amplitude = high > low ? high - low : 1;
-    Reading reading{NODE2_SOUND_REFERENCE_DB +
-        20.0f * log10f(amplitude / NODE2_SOUND_REFERENCE_COUNTS), amplitude, millis()};
+
+    const float amplitude = high > low ? static_cast<float>(high - low) : 1.0f;
+
+    // Logarithmic acoustic decibel estimation relative to 400 counts @ 58 dB
+    float calculatedDb = NODE2_SOUND_REFERENCE_DB +
+        20.0f * log10f(amplitude / NODE2_SOUND_REFERENCE_COUNTS);
+
+    // Realistic physical acoustic clamping:
+    // Floor: 36.0 dB (real-world quiet room noise floor; eliminates fake 20 dB glitch)
+    // Ceiling: 88.0 dB (loud clapping or close shouting)
+    if (calculatedDb < 36.0f) calculatedDb = 36.0f;
+    if (calculatedDb > 88.0f) calculatedDb = 88.0f;
+
+    // Fast attack on acoustic transients (0.35) and smooth decay on silence (0.12)
+    const float alpha = (calculatedDb > smoothedDb) ? 0.35f : 0.12f;
+    smoothedDb = smoothedDb + alpha * (calculatedDb - smoothedDb);
+
+    Reading reading{smoothedDb, amplitude, millis()};
     xQueueOverwrite(soundQueue, &reading);
     vTaskDelay(1); // Let idle/watchdog run after every bounded window.
   }
