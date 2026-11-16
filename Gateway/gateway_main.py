@@ -204,16 +204,22 @@ class SmartWorkstationAI:
     @staticmethod
     def _load_or_train(path: Path):
         import joblib
+
+        def _extract_model(obj: Any) -> Any:
+            return obj["model"] if isinstance(obj, dict) and "model" in obj else obj
+
         if path.exists():
             try:
-                return joblib.load(path)
+                loaded = joblib.load(path)
+                return _extract_model(loaded)
             except Exception as exc:  # e.g. scikit-learn version mismatch between laptop and Pi
                 log.warning("Could not load %s (%s); retraining", path.name, exc)
         else:
             log.warning("%s not found; training a new model", path.name)
         metrics = train_and_save(path)
         log.info("Trained model: accuracy %.3f, latency %.2f ms", metrics["accuracy"], metrics["latency_ms"])
-        return joblib.load(path)
+        loaded = joblib.load(path)
+        return _extract_model(loaded)
 
     def predict(self, features: List[float]) -> Dict[str, Any]:
         x = np.asarray([features], dtype=np.float64)

@@ -96,6 +96,22 @@ CLASS_DEFINITIONS = {
     },
 }
 
+CLASS_INFO = CLASS_DEFINITIONS
+MODEL_PATH = Path(__file__).resolve().parent / "model.joblib"
+
+
+def train_and_save(path: Path | str = MODEL_PATH) -> Dict[str, Any]:
+    """Trains and serializes the classifier, returning performance metrics."""
+    output_path = Path(path)
+    bundle = train_and_export_model(model_output_path=str(output_path))
+    # Serialize classifier directly so joblib.load(path) returns the estimator
+    joblib.dump(bundle["model"], str(output_path))
+    return {
+        "accuracy": bundle["metrics"]["test_accuracy"],
+        "latency_ms": bundle["metrics"]["mean_latency_ms"],
+    }
+
+
 
 def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_state: int = 42) -> Tuple[np.ndarray, np.ndarray]:
     """

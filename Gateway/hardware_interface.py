@@ -20,6 +20,7 @@ Features:
 
 from __future__ import annotations
 
+import abc
 import logging
 import math
 import os
@@ -28,7 +29,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +38,20 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("HardwareInterface")
+
+# Half-step sequence for 28BYJ-48 stepper motor (8 phases)
+STEP_SEQUENCE: List[List[int]] = [
+    [1, 0, 0, 0],
+    [1, 1, 0, 0],
+    [0, 1, 0, 0],
+    [0, 1, 1, 0],
+    [0, 0, 1, 0],
+    [0, 0, 1, 1],
+    [0, 0, 0, 1],
+    [1, 0, 0, 1],
+]
+
+CURTAIN_TRAVEL_STEPS: int = int(os.getenv("CURTAIN_TRAVEL_STEPS", "4096"))
 
 # Check for RPi.GPIO and smbus2 availability
 _CAN_IMPORT_RPI = False
@@ -90,73 +105,134 @@ class CurtainState:
     UNKNOWN = "UNKNOWN"
 
 
-class HardwareInterface:
-    """
-    Unified hardware controller for Raspberry Pi 4 Gateway.
-    Handles sensor readings, motor stepping, PWM brightness tuning,
-    servo tilting, and hardware interrupt-driven emergency stops.
-    """
+class BaseHardware(abc.ABC):
+    """Abstract interface defining required hardware methods for Gateway daemon."""
 
-    # Half-step sequence for 28BYJ-48 stepper motor (8 phases)
-    STEP_SEQUENCE = [
-        [1, 0, 0, 0],
-        [1, 1, 0, 0],
-        [0, 1, 0, 0],
-        [0, 1, 1, 0],
-        [0, 0, 1, 0],
-        [0, 0, 1, 1],
-        [0, 0, 0, 1],
-        [1, 0, 0, 1],
-    ]
+    @property
+    @abc.abstractmethod
+    def is_mock(self) -> bool:
+        """Returns True if running in simulation / mock mode."""
+        ...
 
-    # Full travel for curtain (approx. 2.5 full rotations = 2.5 * 4096 = 10,240 half-steps)
-    MAX_CURTAIN_STEPS = 10240
-    HOMING_TIMEOUT_STEPS = 12000
+    @abc.abstractmethod
+    def read_distance_cm(self) -> float:
+        """Measures distance to user in cm via HC-SR04 ultrasonic sensor."""
+        ...
 
-    def __init__(self, pin_config: Optional[PinConfig] = None, mock: Optional[bool] = None) -> None:
-        self.pins = pin_config or PinConfig()
+    @abc.abstractmethod
+    def read_lux(self) -> float:
+        """Reads ambient lighting intensity in Lux via BH1750 sensor."""
+        ...
 
-        # Decide whether to run in mock mode
-        env_mock = os.getenv("MOCK_HARDWARE", "").lower() in ("1", "true", "yes")
-        if mock is not None:
-            self.mock_mode = mock
-        else:
-            self.mock_mode = env_mock or not (_CAN_IMPORT_RPI and _CAN_IMPORT_SMBUS)
+    @abc.abstractmethod
+    def limit_switch_pressed(self) -> bool:
+        """Returns True if the safety curtain limit switch is active/pressed."""
+        ...
 
-        # Thread synchronization
+    @abc.abstractmethod
+    def step(self, direction: int) -> None:
+        """Advances stepper by 1 half-step (+1 for DOWN/CLOSE, -1 for UP/OPEN)."""
+        ...
+
+    @abc.abstractmethod
+    def release_stepper(self) -> None:
+        """De-energizes all four coils on the stepper motor driver."""
+        ...
+
+    @abc.abstractmethod
+    def set_led_duty(self, duty_pct: float) -> None:
+        """Sets the LED light bar PWM duty cycle (0.0% to 100.0%)."""
+        ...
+
+    @abc.abstractmethod
+    def set_servo_angle(self, angle_deg: float) -> None:
+        """Sets the SG90 micro-servo tilt angle (0.0° to 180.0°)."""
+        ...
+
+    @abc.abstractmethod
+    def cleanup(self) -> None:
+        """Safely shuts down PWM, resets pins, and closes I2C handles."""
+        ...
+
+
+class MockHardware(BaseHardware):
+    """Simulated hardware interface for laptop development and offline testing."""
+
+    def __init__(self) -> None:
+        self._led_duty: float = 0.0
+        self._servo_angle: float = 85.0
+        self._position: int = 0
+        self._base_lux: float = 300.0
         self._lock = threading.Lock()
-        self._motor_lock = threading.Lock()
+        logger.info("Initialized MockHardware (Simulation Mode)")
 
-        # Actuator states
-        self.curtain_state = CurtainState.UNKNOWN
-        self.curtain_position_steps = 0  # 0 = Fully OPEN, MAX_CURTAIN_STEPS = Fully CLOSED
-        self.led_duty_cycle = 0.0        # 0.0% to 100.0%
-        self.servo_angle = 90.0          # 0.0° to 180.0° (90° = neutral centered)
-        self.is_emergency_stopped = False
+    @property
+    def is_mock(self) -> bool:
+        return True
+
+    def read_distance_cm(self) -> float:
+        # Normal reading distance: 38.0 to 45.0 cm with small jitter
+        return round(42.0 + random.uniform(-1.0, 1.0), 1)
+
+    def read_lux(self) -> float:
+        with self._lock:
+            # Ambient light responds in closed-loop to LED PWM duty
+            boost = (self._led_duty / 100.0) * 350.0
+            noise = random.uniform(-2.0, 2.0)
+            return round(max(0.0, self._base_lux + boost + noise), 1)
+
+    def limit_switch_pressed(self) -> bool:
+        # Triggered at home (OPEN, position <= 0)
+        return self._position <= 0
+
+    def step(self, direction: int) -> None:
+        with self._lock:
+            if direction > 0:
+                self._position += 1
+            elif direction < 0:
+                self._position = max(0, self._position - 1)
+
+    def release_stepper(self) -> None:
+        pass
+
+    def set_led_duty(self, duty_pct: float) -> None:
+        with self._lock:
+            self._led_duty = max(0.0, min(100.0, float(duty_pct)))
+
+    def set_servo_angle(self, angle_deg: float) -> None:
+        with self._lock:
+            self._servo_angle = max(0.0, min(180.0, float(angle_deg)))
+
+    def cleanup(self) -> None:
+        logger.info("MockHardware cleanup complete.")
+
+
+class RPiHardware(BaseHardware):
+    """Physical hardware interface for Raspberry Pi 4 Model B."""
+
+    def __init__(self, pin_config: Optional[PinConfig] = None) -> None:
+        if not _CAN_IMPORT_RPI or not _CAN_IMPORT_SMBUS:
+            raise RuntimeError("RPi.GPIO or smbus2 is not available on this platform.")
+
+        self.pins = pin_config or PinConfig()
+        self._lock = threading.Lock()
+        self._step_phase = 0
+        self._led_duty = 0.0
+        self._servo_angle = 85.0
 
         # Physical hardware handles
         self._led_pwm = None
         self._servo_pwm = None
         self._i2c_bus = None
 
-        # Mock simulation state variables
-        self._mock_distance = 45.0
-        self._mock_base_lux = 250.0
-        self._mock_limit_switch_pressed = False
+        self._init_gpio()
+        logger.info("Physical RPiHardware initialized successfully.")
 
-        if self.mock_mode:
-            logger.info(">>> Initialized in SIMULATION / MOCK HARDWARE MODE <<<")
-            self.curtain_state = CurtainState.OPEN
-            self.curtain_position_steps = 0
-        else:
-            logger.info("Initializing Physical Raspberry Pi GPIO and I2C interfaces...")
-            self._init_physical_hardware()
+    @property
+    def is_mock(self) -> bool:
+        return False
 
-    # =========================================================================
-    # Physical Hardware Initialization
-    # =========================================================================
-    def _init_physical_hardware(self) -> None:
-        """Configures BCM GPIO pin modes, PWM channels, and I2C bus."""
+    def _init_gpio(self) -> None:
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
 
@@ -164,329 +240,149 @@ class HardwareInterface:
         GPIO.setup(self.pins.ULTRASONIC_TRIG, GPIO.OUT, initial=GPIO.LOW)
         GPIO.setup(self.pins.ULTRASONIC_ECHO, GPIO.IN)
 
-        # 2. Limit Switch (KW11-3Z) with pull-up resistor and interrupt callback
+        # 2. Limit Switch (KW11-3Z) with pull-up resistor
         GPIO.setup(self.pins.LIMIT_SWITCH, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.add_event_detect(
-            self.pins.LIMIT_SWITCH,
-            GPIO.FALLING,
-            callback=self._on_limit_switch_triggered,
-            bouncetime=200,
-        )
 
-        # 3. Stepper Motor Pins
-        for pin in (
-            self.pins.STEPPER_IN1,
-            self.pins.STEPPER_IN2,
-            self.pins.STEPPER_IN3,
-            self.pins.STEPPER_IN4,
-        ):
+        # 3. 28BYJ-48 Stepper Motor Pins
+        for pin in (self.pins.STEPPER_IN1, self.pins.STEPPER_IN2, self.pins.STEPPER_IN3, self.pins.STEPPER_IN4):
             GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
 
-        # 4. LED Bar PWM (1000 Hz for flicker-free illumination)
-        GPIO.setup(self.pins.LED_PWM_PIN, GPIO.OUT)
+        # 4. LED PWM (1000 Hz)
+        GPIO.setup(self.pins.LED_PWM_PIN, GPIO.OUT, initial=GPIO.LOW)
         self._led_pwm = GPIO.PWM(self.pins.LED_PWM_PIN, 1000)
         self._led_pwm.start(0.0)
 
-        # 5. SG90 Servo PWM (50 Hz standard hobby servo cycle)
-        GPIO.setup(self.pins.SERVO_PIN, GPIO.OUT)
+        # 5. SG90 Servo PWM (50 Hz)
+        GPIO.setup(self.pins.SERVO_PIN, GPIO.OUT, initial=GPIO.LOW)
         self._servo_pwm = GPIO.PWM(self.pins.SERVO_PIN, 50)
-        self._servo_pwm.start(7.5)  # 7.5% duty = ~90 deg neutral
-        time.sleep(0.2)
-        self._servo_pwm.ChangeDutyCycle(0)  # Stop pulse to avoid motor jitter
+        self._servo_pwm.start(0)
 
         # 6. BH1750 I2C
         try:
             self._i2c_bus = SMBus(self.pins.I2C_BUS)
-            # Power ON BH1750 (Opcode 0x01)
+            # Power on BH1750
             self._i2c_bus.write_byte(self.pins.BH1750_I2C_ADDR, 0x01)
-            # Continuous H-Resolution Mode (Opcode 0x10, 1 lx resolution, 120ms measurement)
-            self._i2c_bus.write_byte(self.pins.BH1750_I2C_ADDR, 0x10)
-            time.sleep(0.15)
-            logger.info("BH1750 Ambient Light Sensor online on I2C-1 addr 0x%02X", self.pins.BH1750_I2C_ADDR)
         except Exception as e:
-            logger.error("Failed to initialize BH1750 on I2C bus: %s", e)
+            logger.warning("Failed to initialize BH1750 on I2C bus %d: %s", self.pins.I2C_BUS, e)
 
-        logger.info("Physical hardware initialization complete.")
+    def read_distance_cm(self) -> float:
+        # Collect 3 pings and use median to reject acoustic multipath spikes
+        pings: List[float] = []
+        for _ in range(3):
+            val = self._single_ultrasonic_ping()
+            if val is not None and 2.0 <= val <= 250.0:
+                pings.append(val)
+            time.sleep(0.005)
 
-    def _on_limit_switch_triggered(self, channel: int) -> None:
-        """Interrupt callback when curtain reaches physical limit switch."""
-        logger.warning("SAFETY ALERT: Limit Switch (KW11-3Z) triggered on GPIO %d!", channel)
-        self.is_emergency_stopped = True
-        self._deenergize_stepper()
-
-    # =========================================================================
-    # Sensors (Requirement M1)
-    # =========================================================================
-    def read_distance_cm(self, samples: int = 3) -> float:
-        """
-        Reads face/head distance from HC-SR04 ultrasonic sensor.
-        Applies a multi-sample median filter to eliminate acoustic reflection spikes.
-        Returns: Distance in centimeters (2.0 to 300.0 cm).
-        """
-        if self.mock_mode:
-            # Generate realistic slight jitter around current mock distance
-            jitter = random.uniform(-0.8, 0.8)
-            return round(max(5.0, min(200.0, self._mock_distance + jitter)), 1)
-
-        readings = []
-        for _ in range(samples):
-            dist = self._single_ultrasonic_ping()
-            if dist is not None and 2.0 <= dist <= 300.0:
-                readings.append(dist)
-            time.sleep(0.02)  # 20ms pause between pings to prevent reverberation
-
-        if not readings:
-            # Fallback if echo was missed
-            return 999.0
-
-        readings.sort()
-        median = readings[len(readings) // 2]
-        return round(median, 1)
+        if not pings:
+            return 999.0  # Out of range / no object detected
+        pings.sort()
+        return round(pings[len(pings) // 2], 1)
 
     def _single_ultrasonic_ping(self) -> Optional[float]:
-        """Sends a 10µs trigger pulse and measures echo pulse width with microsecond timeout."""
         with self._lock:
-            # Send 10µs HIGH pulse to TRIG
-            GPIO.output(self.pins.ULTRASONIC_TRIG, GPIO.LOW)
-            time.sleep(0.000002)
+            # 10us trigger pulse
             GPIO.output(self.pins.ULTRASONIC_TRIG, GPIO.HIGH)
-            time.sleep(0.000010)
+            time.sleep(0.00001)
             GPIO.output(self.pins.ULTRASONIC_TRIG, GPIO.LOW)
 
-            # Wait for ECHO to go HIGH (with 25ms timeout = ~4 meters)
-            start_time = time.time()
-            timeout_epoch = start_time + 0.025
-            pulse_start = start_time
-
-            while GPIO.input(self.pins.ULTRASONIC_ECHO) == 0:
+            timeout_start = time.time() + 0.04
+            while GPIO.input(self.pins.ULTRASONIC_ECHO) == GPIO.LOW:
                 pulse_start = time.time()
-                if pulse_start > timeout_epoch:
+                if pulse_start > timeout_start:
                     return None
 
-            # Wait for ECHO to go LOW
-            pulse_end = pulse_start
-            timeout_epoch = pulse_start + 0.025
-            while GPIO.input(self.pins.ULTRASONIC_ECHO) == 1:
+            timeout_echo = time.time() + 0.04
+            while GPIO.input(self.pins.ULTRASONIC_ECHO) == GPIO.HIGH:
                 pulse_end = time.time()
-                if pulse_end > timeout_epoch:
+                if pulse_end > timeout_echo:
                     return None
 
             pulse_duration = pulse_end - pulse_start
-            # Speed of sound at 20°C is ~343 m/s = 34300 cm/s
-            distance = (pulse_duration * 34300.0) / 2.0
-            return distance
+            # Speed of sound is 343 m/s = 34300 cm/s
+            return (pulse_duration * 34300.0) / 2.0
 
     def read_lux(self) -> float:
-        """
-        Reads ambient reading surface illumination in Lux from BH1750.
-        Returns: Light intensity in Lux (0.0 to 65535.0 Lux).
-        """
-        if self.mock_mode:
-            # Ambient light increases proportionally with LED Bar duty cycle
-            boost = (self.led_duty_cycle / 100.0) * 350.0
-            noise = random.uniform(-4.0, 4.0)
-            return round(max(0.0, self._mock_base_lux + boost + noise), 1)
-
         if self._i2c_bus is None:
             return 0.0
-
         try:
             with self._lock:
                 data = self._i2c_bus.read_i2c_block_data(self.pins.BH1750_I2C_ADDR, 0x10, 2)
             raw_val = (data[0] << 8) | data[1]
-            # BH1750 conversion factor: raw / 1.2
-            lux = raw_val / 1.2
-            return round(lux, 1)
+            return round(raw_val / 1.2, 1)
         except Exception as e:
             logger.warning("Error reading BH1750: %s", e)
             return 0.0
 
-    def is_limit_switch_pressed(self) -> bool:
-        """Returns True if the physical curtain limit switch is triggered/pressed."""
-        if self.mock_mode:
-            return self._mock_limit_switch_pressed or (self.curtain_position_steps >= self.MAX_CURTAIN_STEPS)
-
-        # Pin is pulled HIGH; pressing connects to GND (LOW)
+    def limit_switch_pressed(self) -> bool:
+        # Pin pulled HIGH; switch connects to GND (active LOW)
         return GPIO.input(self.pins.LIMIT_SWITCH) == GPIO.LOW
 
-    # =========================================================================
-    # Actuators (Requirement M2)
-    # =========================================================================
-    def set_led_brightness(self, duty_percent: float) -> None:
-        """
-        Modulates the 5V LED Bar using PWM (0.0% to 100.0%).
-        """
-        duty_percent = max(0.0, min(100.0, float(duty_percent)))
-        self.led_duty_cycle = round(duty_percent, 1)
+    def step(self, direction: int) -> None:
+        with self._lock:
+            if direction > 0:
+                self._step_phase = (self._step_phase + 1) % 8
+            elif direction < 0:
+                self._step_phase = (self._step_phase - 1) % 8
 
-        if not self.mock_mode and self._led_pwm is not None:
-            self._led_pwm.ChangeDutyCycle(self.led_duty_cycle)
+            pattern = STEP_SEQUENCE[self._step_phase]
+            GPIO.output(self.pins.STEPPER_IN1, pattern[0])
+            GPIO.output(self.pins.STEPPER_IN2, pattern[1])
+            GPIO.output(self.pins.STEPPER_IN3, pattern[2])
+            GPIO.output(self.pins.STEPPER_IN4, pattern[3])
 
-    def tune_lighting_closed_loop(self, target_lux: float = 450.0, tolerance: float = 25.0) -> float:
-        """
-        Proportional closed-loop controller maintaining ~450 Lux on study surface.
-        Returns: Current measured lux after adjustment.
-        """
-        current_lux = self.read_lux()
-        error = target_lux - current_lux
-
-        if abs(error) > tolerance:
-            # Proportional gain: adjust duty cycle based on illumination deficit
-            kp = 0.15
-            adjustment = error * kp
-            new_duty = max(0.0, min(100.0, self.led_duty_cycle + adjustment))
-            self.set_led_brightness(new_duty)
-
-        return current_lux
-
-    def set_servo_angle(self, angle_deg: float) -> None:
-        """
-        Sets the SG90 Micro Servo angle (0.0° to 180.0°) to tilt the light bar.
-        0° = tilted downward toward desk, 90° = neutral, 180° = tilted upward.
-        """
-        angle_deg = max(0.0, min(180.0, float(angle_deg)))
-        self.servo_angle = round(angle_deg, 1)
-
-        if not self.mock_mode and self._servo_pwm is not None:
-            # Map 0° -> 2.5% duty cycle, 180° -> 12.5% duty cycle
-            duty = 2.5 + (self.servo_angle / 18.0)
-            self._servo_pwm.ChangeDutyCycle(duty)
-            time.sleep(0.15)
-            # Sleep pulse to eliminate SG90 acoustic servo hum / vibration
-            self._servo_pwm.ChangeDutyCycle(0)
-
-    def step_curtain_motor(self, steps: int, direction_close: bool = True, step_delay: float = 0.0012) -> int:
-        """
-        Steps the 28BYJ-48 motor using half-stepping (8-phase) sequence.
-        direction_close: True = lowering curtain (CLOSE), False = raising curtain (OPEN).
-        Includes limit-switch safety break and automatic coil de-energizing.
-        Returns: Actual steps moved.
-        """
-        with self._motor_lock:
-            steps_moved = 0
-            seq_len = len(self.STEP_SEQUENCE)
-            step_order = range(seq_len) if direction_close else range(seq_len - 1, -1, -1)
-
-            if direction_close:
-                self.curtain_state = CurtainState.CLOSING
-            else:
-                self.curtain_state = CurtainState.OPENING
-
-            try:
-                for _ in range(steps):
-                    # Check limit switch if closing
-                    if direction_close and self.is_limit_switch_pressed():
-                        logger.info("Curtain reached limit switch. Stopping motor.")
-                        self.curtain_position_steps = self.MAX_CURTAIN_STEPS
-                        self.curtain_state = CurtainState.CLOSED
-                        break
-
-                    if not direction_close and self.curtain_position_steps <= 0:
-                        self.curtain_position_steps = 0
-                        self.curtain_state = CurtainState.OPEN
-                        break
-
-                    for phase in step_order:
-                        if not self.mock_mode:
-                            pattern = self.STEP_SEQUENCE[phase]
-                            GPIO.output(self.pins.STEPPER_IN1, pattern[0])
-                            GPIO.output(self.pins.STEPPER_IN2, pattern[1])
-                            GPIO.output(self.pins.STEPPER_IN3, pattern[2])
-                            GPIO.output(self.pins.STEPPER_IN4, pattern[3])
-                        time.sleep(step_delay)
-
-                    steps_moved += 1
-                    if direction_close:
-                        self.curtain_position_steps += 1
-                    else:
-                        self.curtain_position_steps -= 1
-
-            finally:
-                # De-energize coils to prevent ULN2003 / 28BYJ-48 heat buildup
-                self._deenergize_stepper()
-
-            if self.curtain_position_steps >= self.MAX_CURTAIN_STEPS:
-                self.curtain_state = CurtainState.CLOSED
-            elif self.curtain_position_steps <= 0:
-                self.curtain_state = CurtainState.OPEN
-
-            return steps_moved
-
-    def open_curtain(self) -> None:
-        """Fully rolls up the blocker curtain (OPEN)."""
-        if self.curtain_state == CurtainState.OPEN and self.curtain_position_steps == 0:
-            return
-
-        logger.info("Action: Rolling UP Blocker Curtain (OPEN)...")
-        if self.mock_mode:
-            self.curtain_position_steps = 0
-            self.curtain_state = CurtainState.OPEN
-            logger.info("[MOCK] Curtain is now fully OPEN.")
-            return
-
-        steps_needed = self.curtain_position_steps if self.curtain_position_steps > 0 else self.MAX_CURTAIN_STEPS
-        self.step_curtain_motor(steps=steps_needed, direction_close=False)
-        self.curtain_position_steps = 0
-        self.curtain_state = CurtainState.OPEN
-        logger.info("Curtain OPEN complete.")
-
-    def close_curtain(self) -> None:
-        """Lowers the blocker curtain to block improper posture/reading (CLOSE)."""
-        if self.curtain_state == CurtainState.CLOSED and self.curtain_position_steps >= self.MAX_CURTAIN_STEPS:
-            return
-
-        logger.info("Action: Lowering Blocker Curtain (CLOSE)...")
-        if self.mock_mode:
-            self.curtain_position_steps = self.MAX_CURTAIN_STEPS
-            self.curtain_state = CurtainState.CLOSED
-            logger.info("[MOCK] Curtain is now fully CLOSED.")
-            return
-
-        steps_needed = self.MAX_CURTAIN_STEPS - self.curtain_position_steps
-        self.step_curtain_motor(steps=max(100, steps_needed), direction_close=True)
-        self.curtain_position_steps = self.MAX_CURTAIN_STEPS
-        self.curtain_state = CurtainState.CLOSED
-        logger.info("Curtain CLOSE complete.")
-
-    def _deenergize_stepper(self) -> None:
-        """De-energizes all four coils on the ULN2003 driver."""
-        if not self.mock_mode:
+    def release_stepper(self) -> None:
+        with self._lock:
             GPIO.output(self.pins.STEPPER_IN1, GPIO.LOW)
             GPIO.output(self.pins.STEPPER_IN2, GPIO.LOW)
             GPIO.output(self.pins.STEPPER_IN3, GPIO.LOW)
             GPIO.output(self.pins.STEPPER_IN4, GPIO.LOW)
 
-    # =========================================================================
-    # Mock Helpers (For unit tests and offline testing)
-    # =========================================================================
-    def set_mock_distance(self, dist_cm: float) -> None:
-        self._mock_distance = float(dist_cm)
+    def set_led_duty(self, duty_pct: float) -> None:
+        duty_pct = max(0.0, min(100.0, float(duty_pct)))
+        self._led_duty = round(duty_pct, 1)
+        if self._led_pwm is not None:
+            self._led_pwm.ChangeDutyCycle(self._led_duty)
 
-    def set_mock_base_lux(self, lux: float) -> None:
-        self._mock_base_lux = float(lux)
+    def set_servo_angle(self, angle_deg: float) -> None:
+        angle_deg = max(0.0, min(180.0, float(angle_deg)))
+        self._servo_angle = round(angle_deg, 1)
+        if self._servo_pwm is not None:
+            # Map 0° -> 2.5% duty, 180° -> 12.5% duty
+            duty = 2.5 + (self._servo_angle / 18.0)
+            self._servo_pwm.ChangeDutyCycle(duty)
+            time.sleep(0.12)
+            self._servo_pwm.ChangeDutyCycle(0)  # Silence servo motor hum
 
-    def set_mock_limit_switch(self, pressed: bool) -> None:
-        self._mock_limit_switch_pressed = bool(pressed)
-
-    # =========================================================================
-    # Cleanup & Teardown
-    # =========================================================================
     def cleanup(self) -> None:
-        """Releases GPIO pins, stops PWM timers, and clears bus handles."""
-        logger.info("Cleaning up hardware interfaces...")
+        logger.info("Cleaning up RPi GPIO and PWM handles...")
         try:
-            self.set_led_brightness(0.0)
+            self.set_led_duty(0.0)
             if self._led_pwm:
                 self._led_pwm.stop()
             if self._servo_pwm:
                 self._servo_pwm.stop()
-            self._deenergize_stepper()
-
-            if not self.mock_mode and GPIO:
-                GPIO.cleanup()
-            if not self.mock_mode and self._i2c_bus:
+            self.release_stepper()
+            GPIO.cleanup()
+            if self._i2c_bus:
                 self._i2c_bus.close()
         except Exception as e:
-            logger.warning("Error during hardware cleanup: %s", e)
-        logger.info("Hardware cleanup finished.")
+            logger.warning("Error during GPIO cleanup: %s", e)
 
+
+def create_hardware(mock: bool = False) -> BaseHardware:
+    """Factory creating either real RPiHardware or simulated MockHardware."""
+    if mock:
+        return MockHardware()
+    if not _CAN_IMPORT_RPI or not _CAN_IMPORT_SMBUS:
+        logger.info("RPi.GPIO or smbus2 not installed; using MockHardware.")
+        return MockHardware()
+    try:
+        return RPiHardware()
+    except Exception as exc:
+        logger.warning("Failed to initialize physical hardware (%s); falling back to MockHardware.", exc)
+        return MockHardware()
+
+
+# Backward-compatible alias
+HardwareInterface = MockHardware if not _CAN_IMPORT_RPI else RPiHardware
