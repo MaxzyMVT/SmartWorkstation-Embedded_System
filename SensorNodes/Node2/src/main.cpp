@@ -58,6 +58,8 @@ void vTaskSoundSample(void *) {
   analogSetPinAttenuation(kSoundPin, ADC_11db);
   float peakDb = 38.0f;  // Peak decibel hold with smooth decay
   float peakAmp = 0.0f;  // Peak amplitude hold with smooth decay
+  uint32_t peakHoldUntil = 0;
+  uint32_t ampHoldUntil = 0;
   uint16_t lastSample = 0;
 
   for (;;) {
@@ -82,18 +84,22 @@ void vTaskSoundSample(void *) {
       if (instDb > 88.0f) instDb = 88.0f;
     }
 
-    // Peak Program Meter (PPM) ballistic response:
+    // Peak Program Meter (PPM) ballistic response with 1.5-second peak hold:
     // 1. Instant attack: sound spikes (claps/shouts) register immediately without dampening.
-    // 2. Controlled release: decay of 0.6 dB per 50 ms (~12 dB/s) so peaks stay visible.
+    // 2. Peak Hold (1500 ms): holds highest peak so 1-second telemetry capture never misses transients.
+    // 3. Controlled release: smooth decay of 0.5 dB per 50 ms (~10 dB/s) after hold expires.
+    const uint32_t nowMs = millis();
     if (instDb >= peakDb) {
       peakDb = instDb;
-    } else {
-      peakDb = (peakDb > 35.6f) ? (peakDb - 0.6f) : 35.0f;
+      peakHoldUntil = nowMs + 1500;
+    } else if (nowMs >= peakHoldUntil) {
+      peakDb = (peakDb > 35.5f) ? (peakDb - 0.5f) : 35.0f;
     }
 
     if (amplitude >= peakAmp) {
       peakAmp = amplitude;
-    } else {
+      ampHoldUntil = nowMs + 1500;
+    } else if (nowMs >= ampHoldUntil) {
       peakAmp = (peakAmp > 1.0f) ? (peakAmp * 0.90f) : 0.0f;
     }
 
