@@ -21,7 +21,7 @@ constexpr uint8_t kSoundPin = 35; // ADC1 works while Wi-Fi runs.
 constexpr uint8_t kTempPin = 4;
 constexpr uint32_t kWindowUs = 50000;
 constexpr uint32_t kTempPeriodMs = 2500;
-struct Reading { float value; uint32_t sampledMs; };
+struct Reading { float value; float raw; uint32_t sampledMs; };
 QueueHandle_t soundQueue;
 QueueHandle_t tempQueue;
 QueueHandle_t ackQueue;
@@ -66,7 +66,7 @@ void vTaskSoundSample(void *) {
     } while (static_cast<uint32_t>(micros() - start) < kWindowUs);
     const float amplitude = high > low ? high - low : 1;
     Reading reading{NODE2_SOUND_REFERENCE_DB +
-        20.0f * log10f(amplitude / NODE2_SOUND_REFERENCE_COUNTS), millis()};
+        20.0f * log10f(amplitude / NODE2_SOUND_REFERENCE_COUNTS), amplitude, millis()};
     xQueueOverwrite(soundQueue, &reading);
     vTaskDelay(1); // Let idle/watchdog run after every bounded window.
   }
@@ -95,9 +95,9 @@ void vTaskTempSample(void *) {
     const float value = sensor.readTemperature();
     const bool valid = isfinite(value) && value >= -40 && value <= 80;
 #endif
-    Reading reading{valid ? value : NAN, millis()};
+    Reading reading{valid ? value : NAN, value, millis()};
     xQueueOverwrite(tempQueue, &reading);
-    if (!valid) Serial.println("Temperature read failed");
+    if (!valid) Serial.printf("[Temp Sensor] Read failed on GPIO 4 (got: %.2f) - check pin wiring or pull-up\n", value);
     vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(kTempPeriodMs));
   }
 }
@@ -137,8 +137,27 @@ void vTaskMqttDispatch(void *) {
     if (now - lastSample >= 1000) {
       lastSample += 1000;
       Reading sound{}, temp{};
-      if (xQueuePeek(soundQueue, &sound, 0) == pdTRUE &&
-          xQueuePeek(tempQueue, &temp, 0) == pdTRUE &&
+      const bool hasSound = (xQueuePeek(soundQueue, &sound, 0) == pdTRUE);
+      const bool hasTemp = (xQueuePeek(tempQueue, &temp, 0) == pdTRUE);
+
+      char tempStr[20];
+      if (hasTemp && isfinite(temp.value)) {
+        snprintf(tempStr, sizeof(tempStr), "%.1f C", temp.value);
+      } else {
+        snprintf(tempStr, sizeof(tempStr), "FAIL/NAN");
+      }
+
+      char soundStr[32];
+      if (hasSound && isfinite(sound.value)) {
+        snprintf(soundStr, sizeof(soundStr), "%.1f dB (p2p:%.0f)", sound.value, sound.raw);
+      } else {
+        snprintf(soundStr, sizeof(soundStr), "FAIL/NAN");
+      }
+
+      Serial.printf("[Node2 Monitor] Temp: %-10s | Sound: %-20s | Queue: %u\n",
+                    tempStr, soundStr, static_cast<unsigned>(backlog.size()));
+
+      if (hasSound && hasTemp &&
           isfinite(temp.value) && isfinite(sound.value) &&
           millis() - temp.sampledMs <= 6000 && millis() - sound.sampledMs <= 1000) {
         const Telemetry packet{temp.value, sound.value, ++seq};
@@ -192,6 +211,12 @@ void vTaskMqttDispatch(void *) {
 
 void setup() {
   Serial.begin(115200);
+  delay(500);
+  Serial.println("\n==========================================");
+  Serial.println("  SmartWorkstation - Sensor Node 2 (Desk) ");
+  Serial.println("  GPIO 4 : DHT22 / DS18B20 Temp Sensor    ");
+  Serial.println("  GPIO 35: MAX9814 Acoustic Sound Sensor  ");
+  Serial.println("==========================================");
   soundQueue = xQueueCreate(1, sizeof(Reading));
   tempQueue = xQueueCreate(1, sizeof(Reading));
   ackQueue = xQueueCreate(1, sizeof(int));
