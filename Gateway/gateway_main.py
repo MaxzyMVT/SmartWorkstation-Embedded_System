@@ -1,535 +1,784 @@
-"""
-Smart Workstation - Central Gateway Firmware & AI Control Daemon
-Course: 2110356 Embedded System (CEDT), Chulalongkorn University
+#!/usr/bin/env python3
+"""gateway_main.py -- Smart Workstation Gateway daemon (Raspberry Pi 4 / --mock on a laptop).
 
-Runs exclusively on the Raspberry Pi 4 Gateway:
-- Ingests wireless sensor packets from ESP32 Sensor Nodes via MQTT.
-- Reads directly-wired sensors (HC-SR04 ultrasonic, BH1750 I2C lux, KW11-3Z limit switch).
-- Executes on-device Machine Learning model (<10ms inference) every 1 second.
-- Drives physical actuators in a closed loop (28BYJ-48 stepper curtain, LED PWM, SG90 servo).
-- Publishes unified telemetry to `smart_workstation/telemetry` for the Web Dashboard.
-- Dispatches alert notifications to Discord & LINE Webhooks on posture/environment violations.
-"""
+Pipeline, once per second (AGENTS.md sections 4.2 / 4.5):
+    MQTT node1 + node2  --\
+    HC-SR04 + BH1750    ---+--> feature vector --> SmartWorkstationAI (model.joblib, <10 ms)
+                                   --> actuators (stepper curtain, SG90 servo, PWM LED bar)
+                                   --> smart_workstation/telemetry (MQTT, 1 Hz)
+                                   --> SQLite outbox --> Firestore (M5)   |  Discord / LINE alerts (M6)
 
+Closed loop: actuators change the room, the next BH1750/HC-SR04 reading sees the
+change, and the model decides again. Actuator decisions come from the model's class,
+never from raw-sensor if/else (rubric M4).
+
+Usage:
+    python gateway_main.py --mock --broker localhost      # laptop simulation
+    python gateway_main.py --broker localhost             # on the Pi
+"""
 from __future__ import annotations
 
 import argparse
 import json
 import logging
 import os
+import queue
 import signal
-import sys
+import sqlite3
 import threading
 import time
-from dataclasses import asdict, dataclass
-from datetime import datetime
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-import requests
+import numpy as np
 
-# Local modules
-from hardware_interface import CurtainState, HardwareInterface
-from train_ai_model import SmartWorkstationAI
-
-# Logging configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] [%(levelname)s] [Gateway] %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger("GatewayMain")
-
-# Optional MQTT import with fallback
 try:
-    import paho.mqtt.client as mqtt  # type: ignore
-    _HAS_PAHO = True
-except ImportError:
-    mqtt = None
-    _HAS_PAHO = False
+    import paho.mqtt.client as mqtt
+except ImportError as exc:  # pragma: no cover
+    raise SystemExit("paho-mqtt (>=2.0) is required: pip install -r requirements.txt") from exc
+
+from hardware_interface import CURTAIN_TRAVEL_STEPS, BaseHardware, create_hardware
+from train_ai_model import CLASS_INFO, FEATURE_NAMES, MODEL_PATH, train_and_save
+
+log = logging.getLogger("gateway")
+BASE_DIR = Path(__file__).resolve().parent
+
+TOPIC_NODE1 = "smart_workstation/node1"
+TOPIC_NODE2 = "smart_workstation/node2"
+TOPIC_TELEMETRY = "smart_workstation/telemetry"
+TOPIC_STATUS = "smart_workstation/gateway/status"
+
+AI_LATENCY_BUDGET_MS = 10.0
+SERVO_REST_DEG = 85.0
+SERVO_NUDGE_DEG = 110.0   # posture: tilt monitor arm / lamp toward the user
+SERVO_BREAK_DEG = 60.0    # break prompt: visible physical movement
+LED_STEP_PCT = 15.0       # closed-loop LED ramp per control cycle
+LED_IDLE_CAP_PCT = 20.0   # energy saving when the chair is empty
+STEPPER_DELAY_S = 0.002   # ~500 half-steps/s, safe for a 28BYJ-48
+DEFAULT_TEMP_C, DEFAULT_SOUND_DB = 24.0, 35.0  # only used before node2 ever reports
 
 
-@dataclass
-class Node1Data:
-    """Telemetry from ESP32 Sensor Node 1 (Chair Presence)."""
-    presence: int = 1
-    sitting_duration_min: float = 0.0
-    last_updated: float = 0.0
+# ----------------------------------------------------------------------------
+# Config helpers
+# ----------------------------------------------------------------------------
+def load_dotenv(path: Path) -> None:
+    """Minimal .env loader (no dependency). Existing environment variables win."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
 
 
-@dataclass
-class Node2Data:
-    """Telemetry from ESP32 Sensor Node 2 (Ambient Environment)."""
-    temp_c: float = 24.5
-    sound_db: float = 35.0
-    last_updated: float = 0.0
+def is_configured(value: Optional[str]) -> bool:
+    """False for empty values and for the YOUR_... / ... placeholders in .env.example."""
+    if not value:
+        return False
+    v = value.strip()
+    return bool(v) and "..." not in v and "YOUR_" not in v.upper() and v.upper() not in ("CHANGE_ME", "TODO")
 
 
-class WebhookNotifier:
-    """
-    Dispatches asynchronous alert notifications to Discord and LINE
-    with rate-limiting / cooldown to prevent message flooding.
-    """
+def _to_float(v: Any, lo: float, hi: float) -> Optional[float]:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if lo <= f <= hi else None
 
-    def __init__(
-        self,
-        discord_url: Optional[str] = None,
-        line_token: Optional[str] = None,
-        cooldown_sec: float = 45.0,
-    ) -> None:
-        self.discord_url = discord_url or os.getenv("DISCORD_WEBHOOK_URL", "")
-        self.line_token = line_token or os.getenv("LINE_NOTIFY_TOKEN", "")
-        self.cooldown_sec = cooldown_sec
-        self._last_alert_time: Dict[str, float] = {}
+
+def _to_bool(v: Any) -> Optional[bool]:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("1", "true", "yes", "on", "seated"):
+            return True
+        if s in ("0", "false", "no", "off", "empty"):
+            return False
+    return None
+
+
+# ----------------------------------------------------------------------------
+# Node ingestion (E4: duplicate suppression + loss accounting via seq)
+# ----------------------------------------------------------------------------
+class NodeRegistry:
+    NODE1_TIMEOUT_S = 15.0   # Node 1 deep-sleeps when the chair is empty -> silence means "empty"
+    NODE2_HOLD_S = 30.0      # keep last Node 2 reading this long before flagging STALE
+
+    def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._rx_time: Dict[str, float] = {}
+        self._last_seq: Dict[str, int] = {}
+        self.stats = {n: {"rx": 0, "dup": 0, "lost": 0, "bad": 0} for n in ("node1", "node2")}
+        self.seat: Optional[bool] = None
+        self.sitting_min: Optional[float] = None
+        self.battery_mv: Optional[float] = None
+        self.temp: Optional[float] = None
+        self.sound: Optional[float] = None
 
-    def dispatch_alert(self, alert_key: str, title: str, description: str, fields: Optional[Dict[str, str]] = None) -> None:
-        """Sends alert if cooldown period has elapsed for the given alert_key."""
-        now = time.time()
+    def ingest(self, topic: str, raw: bytes | str) -> bool:
+        node = "node1" if topic.endswith("/node1") else "node2" if topic.endswith("/node2") else None
+        if node is None:
+            return False
+        try:
+            msg = json.loads(raw)
+            if not isinstance(msg, dict):
+                raise ValueError("payload is not a JSON object")
+        except (ValueError, TypeError) as exc:
+            self.stats[node]["bad"] += 1
+            log.warning("%s: dropped malformed payload (%s)", node, exc)
+            return False
+
         with self._lock:
-            last_time = self._last_alert_time.get(alert_key, 0.0)
-            if now - last_time < self.cooldown_sec:
-                return  # Skip due to cooldown
-            self._last_alert_time[alert_key] = now
+            seq = msg.get("seq")
+            if isinstance(seq, int) and not isinstance(seq, bool):
+                last = self._last_seq.get(node)
+                if last is not None:
+                    if seq == last or 0 < last - seq <= 10:
+                        self.stats[node]["dup"] += 1  # retransmission / late duplicate
+                        return False
+                    if seq > last:
+                        self.stats[node]["lost"] += seq - last - 1
+                    # seq far below last => node rebooted; accept and resync
+                self._last_seq[node] = seq
 
-        # Run dispatch in a background thread to prevent blocking control loop
-        thread = threading.Thread(
-            target=self._send_payloads,
-            args=(title, description, fields),
-            daemon=True,
-        )
-        thread.start()
-
-    def _send_payloads(self, title: str, description: str, fields: Optional[Dict[str, str]]) -> None:
-        # 1. Discord Webhook
-        if self.discord_url and self.discord_url.startswith("http"):
-            try:
-                embed_fields = []
-                if fields:
-                    for k, v in fields.items():
-                        embed_fields.append({"name": k, "value": str(v), "inline": True})
-
-                payload = {
-                    "username": "Smart Workstation Bot",
-                    "avatar_url": "https://img.icons8.com/fluency/96/desk.png",
-                    "embeds": [
-                        {
-                            "title": f"⚠️ {title}",
-                            "description": description,
-                            "color": 0xE11D48,  # Red/Rose
-                            "fields": embed_fields,
-                            "footer": {"text": "Chula CEDT Embedded System Final Project 2026"},
-                            "timestamp": datetime.utcnow().isoformat(),
-                        }
-                    ],
-                }
-                requests.post(self.discord_url, json=payload, timeout=4.0)
-                logger.info("Dispatched Discord Webhook alert: '%s'", title)
-            except Exception as e:
-                logger.warning("Failed to dispatch Discord Webhook: %s", e)
-
-        # 2. LINE Notify
-        if self.line_token:
-            try:
-                msg = f"\n[Smart Workstation]\n⚠️ {title}\n{description}"
-                if fields:
-                    for k, v in fields.items():
-                        msg += f"\n- {k}: {v}"
-                headers = {"Authorization": f"Bearer {self.line_token}"}
-                requests.post(
-                    "https://notify-api.line.me/api/notify",
-                    data={"message": msg},
-                    headers=headers,
-                    timeout=4.0,
-                )
-                logger.info("Dispatched LINE Notify alert: '%s'", title)
-            except Exception as e:
-                logger.warning("Failed to dispatch LINE Notify: %s", e)
-
-
-class SmartWorkstationGateway:
-    """
-    Central daemon managing hardware, MQTT communication, AI inference,
-    and closed-loop physical actuation.
-    """
-
-    MQTT_TOPIC_NODE1 = "smart_workstation/node1"
-    MQTT_TOPIC_NODE2 = "smart_workstation/node2"
-    MQTT_TOPIC_TELEMETRY = "smart_workstation/telemetry"
-    MQTT_TOPIC_COMMANDS = "smart_workstation/commands"
-
-    def __init__(
-        self,
-        broker_host: str = "localhost",
-        broker_port: int = 1883,
-        mock_hardware: bool = False,
-        model_path: str = "model.joblib",
-    ) -> None:
-        self.broker_host = broker_host
-        self.broker_port = broker_port
-        self.running = False
-
-        # Subsystems
-        self.hw = HardwareInterface(mock=mock_hardware)
-        self.ai = SmartWorkstationAI(model_path=model_path)
-        self.notifier = WebhookNotifier()
-
-        # Thread-safe remote sensor telemetry
-        self.node1 = Node1Data()
-        self.node2 = Node2Data()
-        self.state_lock = threading.Lock()
-
-        # Tracking state
-        self.consecutive_class_counts: Dict[int, int] = {i: 0 for i in range(7)}
-        self.current_ai_state: Dict[str, Any] = {}
-        self.last_curtain_action_time = 0.0
-
-        # MQTT Client
-        self.mqtt_client: Optional[Any] = None
-        if _HAS_PAHO:
-            self._init_mqtt()
-        else:
-            logger.warning("paho-mqtt not available. Running MQTT in mock/offline mode.")
-
-    def _init_mqtt(self) -> None:
-        client_id = f"rpi_gateway_{os.getpid()}"
-        if hasattr(mqtt, "CallbackAPIVersion"):
-            self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id, protocol=mqtt.MQTTv311)
-        else:
-            self.mqtt_client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
-        self.mqtt_client.on_connect = self._on_mqtt_connect
-        self.mqtt_client.on_message = self._on_mqtt_message
-        self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
-
-    def _on_mqtt_connect(self, client: Any, userdata: Any, flags: Any, rc: Any, properties: Any = None) -> None:
-        # rc can be an integer or a ReasonCode object in paho-mqtt v2
-        rc_val = getattr(rc, "value", rc)
-        if rc_val == 0:
-            logger.info("Connected to MQTT Broker at %s:%d", self.broker_host, self.broker_port)
-            client.subscribe([(self.MQTT_TOPIC_NODE1, 0), (self.MQTT_TOPIC_NODE2, 0), (self.MQTT_TOPIC_COMMANDS, 0)])
-        else:
-            logger.error("Failed to connect to MQTT Broker, return code: %s", rc)
-
-    def _on_mqtt_disconnect(self, client: Any, userdata: Any, *args: Any) -> None:
-        logger.warning("Disconnected from MQTT Broker. Reconnecting...")
-
-    def _on_mqtt_message(self, client: Any, userdata: Any, msg: Any) -> None:
-        """Parses incoming JSON payloads from Node 1, Node 2, or dashboard commands."""
-        topic = msg.topic
-        payload_str = msg.payload.decode("utf-8", errors="ignore")
-
-        try:
-            data = json.loads(payload_str)
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON received on %s: %s", topic, payload_str)
-            return
-
-        now = time.time()
-        with self.state_lock:
-            if topic == self.MQTT_TOPIC_NODE1:
-                # Sensor Node 1: Chair presence & session duration
-                self.node1.presence = int(data.get("presence", data.get("seat", 1)))
-                self.node1.sitting_duration_min = float(data.get("sitting_duration_min", data.get("duration", 0.0)))
-                self.node1.last_updated = now
-
-            elif topic == self.MQTT_TOPIC_NODE2:
-                # Sensor Node 2: Ambient desk temperature & noise
-                self.node2.temp_c = float(data.get("temp_c", data.get("temp", 24.5)))
-                self.node2.sound_db = float(data.get("sound_db", data.get("sound", 35.0)))
-                self.node2.last_updated = now
-
-            elif topic == self.MQTT_TOPIC_COMMANDS:
-                self._handle_manual_command(data)
-
-    def _handle_manual_command(self, cmd: Dict[str, Any]) -> None:
-        """Handles manual control commands from the Web Dashboard."""
-        logger.info("Received manual dashboard command: %s", cmd)
-        action = cmd.get("action", "").upper()
-        if action == "OPEN_CURTAIN":
-            self.hw.open_curtain()
-        elif action == "CLOSE_CURTAIN":
-            self.hw.close_curtain()
-        elif action == "SET_LED":
-            duty = float(cmd.get("duty", 50.0))
-            self.hw.set_led_brightness(duty)
-        elif action == "SET_SERVO":
-            angle = float(cmd.get("angle", 90.0))
-            self.hw.set_servo_angle(angle)
-
-    def start(self) -> None:
-        """Starts gateway background threads and enters the main 1Hz control loop."""
-        self.running = True
-        logger.info("=" * 65)
-        logger.info("Starting Smart Workstation Gateway Daemon...")
-        logger.info("Requirement M1: 2+ Local sensors (HC-SR04 ultrasonic + BH1750 lux + Limit switch)")
-        logger.info("Requirement M2: Closed-loop actuators (28BYJ-48 curtain + LED bar + SG90 servo)")
-        logger.info("Requirement M4: On-device ML Random Forest inference pipeline")
-        logger.info("=" * 65)
-
-        # Connect MQTT in a non-blocking background thread
-        if self.mqtt_client is not None:
-            try:
-                self.mqtt_client.connect_async(self.broker_host, self.broker_port, keepalive=60)
-                self.mqtt_client.loop_start()
-            except Exception as e:
-                logger.warning("Could not initiate connection to MQTT broker (%s:%d): %s", self.broker_host, self.broker_port, e)
-
-        # Home curtain to initial OPEN position
-        self.hw.open_curtain()
-        self.hw.set_servo_angle(85.0)
-
-        try:
-            while self.running:
-                loop_start = time.time()
-                self._control_iteration()
-                elapsed = time.time() - loop_start
-                sleep_time = max(0.05, 1.0 - elapsed)
-                time.sleep(sleep_time)
-        except KeyboardInterrupt:
-            logger.info("Received KeyboardInterrupt.")
-        finally:
-            self.stop()
-
-    def _control_iteration(self) -> None:
-        """Single closed-loop iteration executed every 1 second."""
-        # 1. Read local physical sensors (M1)
-        distance_cm = self.hw.read_distance_cm()
-        lux = self.hw.read_lux()
-
-        # 2. Retrieve thread-safe wireless node data
-        with self.state_lock:
-            # Check staleness (if no packet received in 15 seconds, use fallback/simulation)
-            now = time.time()
-            if self.hw.mock_mode and (now - self.node1.last_updated > 10.0):
-                # Update mock sitting duration
-                self.node1.sitting_duration_min = round(self.node1.sitting_duration_min + (1.0 / 60.0), 2)
-            presence = self.node1.presence
-            duration_min = self.node1.sitting_duration_min
-            temp_c = self.node2.temp_c
-            sound_db = self.node2.sound_db
-
-        # 3. AI Prediction Pipeline (M4)
-        ai_res = self.ai.predict(
-            presence=presence,
-            distance_cm=distance_cm,
-            lux=lux,
-            temp_c=temp_c,
-            sound_db=sound_db,
-            sitting_duration_min=duration_min,
-        )
-        self.current_ai_state = ai_res
-        class_id = ai_res["class_id"]
-        class_name = ai_res["class_name"]
-
-        # Track consecutive detections to filter transient blips
-        for c in range(7):
-            if c == class_id:
-                self.consecutive_class_counts[c] += 1
+            if node == "node1":
+                seat = _to_bool(msg.get("presence", msg.get("seat")))
+                if seat is not None:
+                    self.seat = seat
+                sit = _to_float(msg.get("sitting_duration_min"), 0, 24 * 60)
+                if sit is not None:
+                    self.sitting_min = sit
+                bat = _to_float(msg.get("battery_mv"), 0, 6000)
+                if bat is not None:
+                    self.battery_mv = bat
             else:
-                self.consecutive_class_counts[c] = 0
+                t = _to_float(msg.get("temp_c", msg.get("temp")), -20, 80)
+                s = _to_float(msg.get("sound_db", msg.get("sound")), 0, 140)
+                if t is not None:
+                    self.temp = t
+                if s is not None:
+                    self.sound = s
 
-        # 4. Closed-Loop Actuation (M2)
-        self._execute_actuation_logic(class_id, distance_cm, lux, temp_c, sound_db, duration_min)
+            self._rx_time[node] = time.monotonic()
+            self.stats[node]["rx"] += 1
+        return True
 
-        # 5. Publish unified telemetry for Web Dashboard & Node-RED
-        self._publish_telemetry(presence, distance_cm, lux, temp_c, sound_db, duration_min, ai_res)
+    def snapshot(self) -> Dict[str, Any]:
+        now = time.monotonic()
+        with self._lock:
+            age1 = now - self._rx_time["node1"] if "node1" in self._rx_time else None
+            age2 = now - self._rx_time["node2"] if "node2" in self._rx_time else None
+            node1_live = age1 is not None and age1 <= self.NODE1_TIMEOUT_S
+            seat = bool(self.seat) if node1_live else False
+            return {
+                "seat": seat,
+                "sitting_min": self.sitting_min if (node1_live and seat) else None,
+                "temp": self.temp if self.temp is not None else DEFAULT_TEMP_C,
+                "sound": self.sound if self.sound is not None else DEFAULT_SOUND_DB,
+                "node_status": {
+                    "node1": "ONLINE" if node1_live else ("ASLEEP_OR_OFFLINE" if age1 is not None else "NEVER_SEEN"),
+                    "node2": ("NEVER_SEEN" if age2 is None else "ONLINE" if age2 <= self.NODE2_HOLD_S else "STALE"),
+                },
+            }
 
-    def _execute_actuation_logic(
-        self,
-        class_id: int,
-        distance_cm: float,
-        lux: float,
-        temp_c: float,
-        sound_db: float,
-        duration_min: float,
-    ) -> None:
-        """Drives stepper curtain, PWM lighting, and servo based on classified state."""
 
-        # Class 0: OPTIMAL_STUDY
-        if class_id == 0:
-            if self.hw.curtain_state != CurtainState.OPEN:
-                self.hw.open_curtain()
-            # Tune illumination in closed-loop to reach ~450 Lux
-            self.hw.tune_lighting_closed_loop(target_lux=450.0)
-            self.hw.set_servo_angle(85.0)
+# ----------------------------------------------------------------------------
+# AI (M4)
+# ----------------------------------------------------------------------------
+class SmartWorkstationAI:
+    """Wraps the RandomForest in model.joblib. 6 features in, 7 states out."""
 
-        # Class 1: TEXT_NECK_TOO_CLOSE (Slouching forward < 28cm)
-        elif class_id == 1:
-            if self.consecutive_class_counts[1] >= 2:  # 2 consecutive seconds confirms text neck
-                if self.hw.curtain_state != CurtainState.CLOSED:
-                    logger.warning("AI ACTION: Closing Curtain due to TEXT_NECK_TOO_CLOSE (%.1f cm)", distance_cm)
-                    self.hw.close_curtain()
-                    self.notifier.dispatch_alert(
-                        alert_key="TEXT_NECK",
-                        title="Text-Neck Posture Warning",
-                        description="Your head is too close to the reading surface (<28 cm). The blocker curtain has dropped.",
-                        fields={"Distance": f"{distance_cm:.1f} cm", "Threshold": "< 28 cm", "Action": "Curtain Closed"},
-                    )
+    def __init__(self, path: Path = MODEL_PATH) -> None:
+        self.model = self._load_or_train(path)
+        self.model.set_params(n_jobs=1)  # thread-pool overhead dominates for 1 sample
+        self.predict([1, 45.0, 500.0, 24.0, 40.0, 10.0])  # warm-up so the first real call is fast
 
-        # Class 2: SLOUCH_TOO_FAR (Leaning back > 65cm)
-        elif class_id == 2:
-            if self.consecutive_class_counts[2] >= 2:
-                if self.hw.curtain_state != CurtainState.CLOSED:
-                    logger.warning("AI ACTION: Closing Curtain due to SLOUCH_TOO_FAR (%.1f cm)", distance_cm)
-                    self.hw.close_curtain()
-                    self.notifier.dispatch_alert(
-                        alert_key="SLOUCH_FAR",
-                        title="Slouching Warning",
-                        description="You are leaning excessively far back (>65 cm). Please align your posture.",
-                        fields={"Distance": f"{distance_cm:.1f} cm", "Threshold": "> 65 cm", "Action": "Curtain Closed"},
-                    )
+    @staticmethod
+    def _load_or_train(path: Path):
+        import joblib
+        if path.exists():
+            try:
+                return joblib.load(path)
+            except Exception as exc:  # e.g. scikit-learn version mismatch between laptop and Pi
+                log.warning("Could not load %s (%s); retraining", path.name, exc)
+        else:
+            log.warning("%s not found; training a new model", path.name)
+        metrics = train_and_save(path)
+        log.info("Trained model: accuracy %.3f, latency %.2f ms", metrics["accuracy"], metrics["latency_ms"])
+        return joblib.load(path)
 
-        # Class 3: POOR_LIGHTING (<200 Lux or >1200 Lux)
-        elif class_id == 3:
-            if lux < 200.0:
-                # Attempt to boost LED Bar to 100%
-                self.hw.set_led_brightness(100.0)
-                if self.consecutive_class_counts[3] >= 3:
-                    self.notifier.dispatch_alert(
-                        alert_key="LOW_LIGHT",
-                        title="Insufficient Lighting Alert",
-                        description=f"Desk illumination is critically low ({lux:.0f} Lux). LED booster set to 100%.",
-                        fields={"Current Lux": f"{lux:.0f} Lux", "Recommended": "400 - 600 Lux"},
-                    )
-            elif lux > 1200.0:
-                # Glare protection: dim LED bar
-                self.hw.set_led_brightness(0.0)
-                if self.consecutive_class_counts[3] >= 3:
-                    self.notifier.dispatch_alert(
-                        alert_key="HIGH_GLARE",
-                        title="Harsh Glare Warning",
-                        description=f"Reading surface glare exceeds safe limits ({lux:.0f} Lux).",
-                        fields={"Current Lux": f"{lux:.0f} Lux", "Action": "LED Dimmed"},
-                    )
-
-        # Class 4: NOISY_OR_HOT_FATIGUE (Sound > 60dB or Temp > 30°C)
-        elif class_id == 4:
-            if self.consecutive_class_counts[4] >= 3:
-                self.notifier.dispatch_alert(
-                    alert_key="ENV_FATIGUE",
-                    title="Environmental Fatigue Warning",
-                    description="Desk conditions are causing mental strain (High noise or excessive temperature).",
-                    fields={"Temperature": f"{temp_c:.1f} °C", "Noise": f"{sound_db:.1f} dB"},
-                )
-
-        # Class 5: BREAK_TIMER_REACHED (>= 50 min continuous study)
-        elif class_id == 5:
-            if self.hw.curtain_state != CurtainState.CLOSED:
-                logger.info("AI ACTION: 50-Minute Study Session Elapsed! Dropping curtain for 5-minute break.")
-                self.hw.close_curtain()
-                self.notifier.dispatch_alert(
-                    alert_key="BREAK_TIME",
-                    title="Study Break Interval Reached",
-                    description="50 minutes of continuous study completed! Stand up, stretch, and give your eyes a 5-minute rest.",
-                    fields={"Study Time": f"{duration_min:.1f} min", "Action": "Curtain Closed (Break Mode)"},
-                )
-
-        # Class 6: AWAY (User left desk)
-        elif class_id == 6:
-            # Turn off lighting to save power; park curtain open
-            if self.hw.led_duty_cycle > 0:
-                self.hw.set_led_brightness(0.0)
-            if self.hw.curtain_state != CurtainState.OPEN:
-                self.hw.open_curtain()
-
-    def _publish_telemetry(
-        self,
-        presence: int,
-        distance_cm: float,
-        lux: float,
-        temp_c: float,
-        sound_db: float,
-        duration_min: float,
-        ai_res: Dict[str, Any],
-    ) -> None:
-        """Publishes consolidated telemetry formatted for React App.jsx."""
-        payload = {
-            # Direct mapping to Interface/src/App.jsx state variables
-            "seat": bool(presence == 1),
-            "distance": round(distance_cm, 1),
-            "light": round(lux, 1),
-            "temp": round(temp_c, 1),
-            "sound": round(sound_db, 1),
-            # Extended telemetry
-            "sitting_duration_min": round(duration_min, 1),
-            "curtain_state": self.hw.curtain_state,
-            "led_duty_cycle": round(self.hw.led_duty_cycle, 1),
-            "servo_angle": round(self.hw.servo_angle, 1),
-            "ai_state": {
-                "class_id": ai_res["class_id"],
-                "class_name": ai_res["class_name"],
-                "confidence": ai_res["confidence"],
-                "action": ai_res["action"],
-                "advice": ai_res["advice"],
-                "latency_ms": ai_res["latency_ms"],
-            },
-            "timestamp": time.time(),
+    def predict(self, features: List[float]) -> Dict[str, Any]:
+        x = np.asarray([features], dtype=np.float64)
+        t0 = time.perf_counter()
+        proba = self.model.predict_proba(x)[0]
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        k = int(np.argmax(proba))
+        class_id = int(self.model.classes_[k])
+        info = CLASS_INFO[class_id]
+        return {
+            "class_id": class_id,
+            "class_name": info["name"],
+            "confidence": round(float(proba[k]), 3),
+            "action": info["action"],
+            "advice": info["advice"],
+            "latency_ms": round(latency_ms, 2),
         }
 
-        # Log iteration summary
-        logger.info(
-            "State: %-20s | Seat: %d | Dist: %5.1fcm | Lux: %5.1f | Temp: %4.1f°C | Sound: %4.1fdB | Curtain: %-7s | LED: %3.0f%%",
-            ai_res["class_name"],
-            presence,
-            distance_cm,
-            lux,
-            temp_c,
-            sound_db,
-            self.hw.curtain_state,
-            self.hw.led_duty_cycle,
-        )
 
-        if self.mqtt_client is not None and self.mqtt_client.is_connected():
-            try:
-                self.mqtt_client.publish(
-                    self.MQTT_TOPIC_TELEMETRY,
-                    json.dumps(payload),
-                    qos=0,
-                )
-            except Exception as e:
-                logger.warning("Failed to publish telemetry to MQTT: %s", e)
+# ----------------------------------------------------------------------------
+# Actuators (M2): stepper curtain on its own thread so the 1 Hz loop never blocks
+# ----------------------------------------------------------------------------
+class CurtainController(threading.Thread):
+    def __init__(self, hw: BaseHardware, step_delay: float) -> None:
+        super().__init__(daemon=True, name="curtain")
+        self.hw = hw
+        self.step_delay = step_delay
+        self.position = 0          # half-steps away from home (0 = fully OPEN)
+        self.state = "HOMING"
+        self._target = "OPEN"
+        self._settled = ""         # last state fully reached
+        self._cv = threading.Condition()
+        self._halt = threading.Event()
+
+    def command(self, target: str) -> None:
+        with self._cv:
+            if target != self._target:
+                self._target = target
+                self._cv.notify()
 
     def stop(self) -> None:
-        """Gracefully shuts down network connections and physical actuators."""
-        logger.info("Stopping Smart Workstation Gateway...")
-        self.running = False
-        if self.mqtt_client is not None:
+        self._halt.set()
+        with self._cv:
+            self._cv.notify()
+
+    def _home(self) -> None:
+        for _ in range(CURTAIN_TRAVEL_STEPS + 400):
+            if self.hw.limit_switch_pressed():
+                break
+            if self._halt.is_set():
+                return
+            self.hw.step(-1)
+            time.sleep(self.step_delay)
+        else:
+            log.error("Curtain homing: limit switch (GPIO17) never triggered; assuming OPEN. Check wiring.")
+        self.hw.release_stepper()
+        self.position = 0
+        self._settled = self.state = "OPEN"
+        log.info("Curtain homed (OPEN)")
+
+    def run(self) -> None:
+        self._home()
+        while not self._halt.is_set():
+            with self._cv:
+                while self._target == self._settled and not self._halt.is_set():
+                    self._cv.wait(0.5)
+                target = self._target
+            if self._halt.is_set():
+                break
+            if target == "CLOSED":
+                self.state = "CLOSING"
+                while self.position < CURTAIN_TRAVEL_STEPS and self._target == "CLOSED" and not self._halt.is_set():
+                    self.hw.step(+1)
+                    self.position += 1
+                    time.sleep(self.step_delay)
+                if self._target == "CLOSED":
+                    self._settled = self.state = "CLOSED"
+            else:
+                self.state = "OPENING"
+                while self.position > 0 and self._target == "OPEN" and not self._halt.is_set():
+                    if self.hw.limit_switch_pressed():
+                        self.position = 0
+                        break
+                    self.hw.step(-1)
+                    self.position -= 1
+                    time.sleep(self.step_delay)
+                if self._target == "OPEN":
+                    self.position = 0 if self.hw.limit_switch_pressed() else self.position
+                    self._settled = self.state = "OPEN"
+            self.hw.release_stepper()  # de-energise coils: no heat, no hum
+
+
+# ----------------------------------------------------------------------------
+# Alerts (M6): Discord webhook + LINE Messaging API, non-blocking, per-class cooldown
+# ----------------------------------------------------------------------------
+class AlertDispatcher:
+    def __init__(self) -> None:
+        self.cooldown_s = float(os.getenv("ALERT_COOLDOWN_S", "300"))
+        self.discord_url = os.getenv("DISCORD_WEBHOOK_URL", "")
+        self.line_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+        self.line_to = os.getenv("LINE_TO_USER_ID", "")
+        self._last_sent: Dict[int, float] = {}
+        self._q: "queue.Queue[Tuple[str, str]]" = queue.Queue(maxsize=50)
+        self._worker = threading.Thread(target=self._run, daemon=True, name="alerts")
+        self._worker.start()
+        log.info("Alerts: discord=%s line=%s cooldown=%.0fs",
+                 "on" if is_configured(self.discord_url) else "dry-run",
+                 "on" if is_configured(self.line_token) and is_configured(self.line_to) else "dry-run",
+                 self.cooldown_s)
+
+    def notify(self, class_id: int, title: str, body: str) -> None:
+        now = time.monotonic()
+        if now - self._last_sent.get(class_id, -1e9) < self.cooldown_s:
+            return
+        self._last_sent[class_id] = now
+        try:
+            self._q.put_nowait((title, body))
+        except queue.Full:
+            log.warning("Alert queue full; dropping alert")
+
+    @staticmethod
+    def _post(url: str, payload: Dict[str, Any], headers: Dict[str, str]) -> None:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers={
+            "Content-Type": "application/json", "User-Agent": "SmartWorkstationGateway/1.0", **headers})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+
+    def _run(self) -> None:
+        while True:
+            title, body = self._q.get()
+            text = f"{title}\n{body}"
+            sent = False
+            if is_configured(self.discord_url):
+                try:
+                    self._post(self.discord_url, {"content": f"**{title}**\n{body}"}, {})
+                    sent = True
+                except (urllib.error.URLError, OSError) as exc:
+                    log.warning("Discord alert failed: %s", exc)
+            if is_configured(self.line_token) and is_configured(self.line_to):
+                try:
+                    self._post("https://api.line.me/v2/bot/message/push",
+                               {"to": self.line_to, "messages": [{"type": "text", "text": text}]},
+                               {"Authorization": f"Bearer {self.line_token}"})
+                    sent = True
+                except (urllib.error.URLError, OSError) as exc:
+                    log.warning("LINE alert failed: %s", exc)
+            if not sent:
+                log.info("[alert dry-run] %s | %s", title, body)
+
+
+# ----------------------------------------------------------------------------
+# Cloud (M5): SQLite store-and-forward outbox (E4) -> Firestore
+# ----------------------------------------------------------------------------
+class Outbox:
+    MAX_ROWS = 20000
+
+    def __init__(self, path: Path) -> None:
+        self._db = sqlite3.connect(str(path), check_same_thread=False)
+        self._lock = threading.Lock()
+        with self._lock:
+            self._db.execute("CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                             "ts REAL NOT NULL, payload TEXT NOT NULL)")
+            self._db.commit()
+
+    def put(self, ts: float, payload: Dict[str, Any]) -> None:
+        with self._lock:
+            self._db.execute("INSERT INTO outbox (ts, payload) VALUES (?, ?)", (ts, json.dumps(payload)))
+            self._db.execute("DELETE FROM outbox WHERE id <= (SELECT MAX(id) FROM outbox) - ?", (self.MAX_ROWS,))
+            self._db.commit()
+
+    def peek(self, n: int) -> List[Tuple[int, float, Dict[str, Any]]]:
+        with self._lock:
+            rows = self._db.execute("SELECT id, ts, payload FROM outbox ORDER BY id LIMIT ?", (n,)).fetchall()
+        return [(r[0], r[1], json.loads(r[2])) for r in rows]
+
+    def delete(self, ids: List[int]) -> None:
+        if not ids:
+            return
+        with self._lock:
+            self._db.executemany("DELETE FROM outbox WHERE id = ?", [(i,) for i in ids])
+            self._db.commit()
+
+    def count(self) -> int:
+        with self._lock:
+            return self._db.execute("SELECT COUNT(*) FROM outbox").fetchone()[0]
+
+
+class FirestoreUploader:
+    """Uploads batches to Firestore. Document ID = timestamp in ms, so retries are idempotent."""
+
+    def __init__(self, cred_path: str, collection: str) -> None:
+        import firebase_admin
+        from firebase_admin import credentials, firestore
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app(credentials.Certificate(cred_path))
+        self._db = firestore.client()
+        self._col = self._db.collection(collection)
+
+    def upload(self, rows: List[Tuple[int, float, Dict[str, Any]]]) -> bool:
+        try:
+            batch = self._db.batch()
+            for _id, ts, payload in rows:
+                batch.set(self._col.document(str(int(ts * 1000))), payload)
+            batch.commit()
+            return True
+        except Exception as exc:  # network down, quota, auth...
+            log.warning("Firestore upload failed (%s); will retry", exc)
+            return False
+
+
+class DryRunUploader:
+    """Mock-mode stand-in so the outbox flush path is exercised without credentials."""
+
+    def upload(self, rows) -> bool:
+        log.info("[cloud dry-run] flushed %d record(s) from outbox", len(rows))
+        return True
+
+
+class CloudForwarder(threading.Thread):
+    def __init__(self, outbox: Outbox, uploader: Any) -> None:
+        super().__init__(daemon=True, name="cloud")
+        self.outbox, self.uploader = outbox, uploader
+        self._halt = threading.Event()
+
+    def stop(self) -> None:
+        self._halt.set()
+
+    def run(self) -> None:
+        backoff = 2.0
+        while not self._halt.wait(backoff):
+            rows = self.outbox.peek(100)
+            if not rows:
+                backoff = 2.0
+                continue
+            if self.uploader.upload(rows):
+                self.outbox.delete([r[0] for r in rows])
+                backoff = 2.0
+            else:
+                backoff = min(backoff * 2, 60.0)  # offline: keep buffering, back off
+
+
+# ----------------------------------------------------------------------------
+# Simulated Node 1 / Node 2 for --mock when no broker/nodes are present
+# ----------------------------------------------------------------------------
+class SimulatedNodes(threading.Thread):
+    """Scripted 90 s scenario feeding NodeRegistry directly (same path as MQTT).
+
+    Sitting time is accelerated (1 s of wall time = 1 min) so NEEDS_BREAK shows up
+    within the test run. Also injects duplicate seq numbers (E4 dedupe) and stops
+    publishing while the chair is empty (Node 1 deep sleep).
+    """
+
+    def __init__(self, registry: NodeRegistry) -> None:
+        super().__init__(daemon=True, name="sim-nodes")
+        self.reg = registry
+        self._halt = threading.Event()
+        self._t0 = time.time()
+        self._s1 = self._s2 = 0
+
+    def stop(self) -> None:
+        self._halt.set()
+
+    def run(self) -> None:
+        while not self._halt.wait(2.0):
+            t = (time.time() - self._t0) % 90.0
+            seated = t < 70.0
+            if seated:
+                self._s1 += 1
+                p1 = json.dumps({"node_id": "node1", "presence": 1, "sitting_duration_min": round(t, 1),
+                                 "battery_mv": 3950, "seq": self._s1})
+                self.reg.ingest(TOPIC_NODE1, p1)
+                if self._s1 % 5 == 0:
+                    self.reg.ingest(TOPIC_NODE1, p1)  # simulated retry -> must be deduped
+            temp = 25.0 + 7.0 * min(1.0, max(0.0, (t - 55.0) / 8.0)) if t < 70 else 25.0
+            sound = 72.0 if 35.0 <= t < 43.0 else 38.0
+            self._s2 += 1
+            self.reg.ingest(TOPIC_NODE2, json.dumps({"node_id": "node2", "temp_c": round(temp, 1),
+                                                     "sound_db": round(sound, 1), "seq": self._s2}))
+
+
+# ----------------------------------------------------------------------------
+# Gateway
+# ----------------------------------------------------------------------------
+class Gateway:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
+        self.stop_evt = threading.Event()
+        self.hw: BaseHardware = create_hardware(mock=args.mock)
+        self.mock = self.hw.is_mock
+        self.registry = NodeRegistry()
+        self.ai = SmartWorkstationAI(Path(args.model))
+        self.curtain = CurtainController(self.hw, 0.0002 if self.mock else STEPPER_DELAY_S)
+        self.alerts = AlertDispatcher()
+
+        self.led_duty = 0.0
+        self.servo_angle = SERVO_REST_DEG
+        self.hw.set_led_duty(0.0)
+        self.hw.set_servo_angle(self.servo_angle)
+
+        self._active_class = 0
+        self._pending_class, self._pending_n = 0, 0
+        self._last_distance: Optional[float] = None
+        self._last_lux: Optional[float] = None
+        self._seat_since: Optional[float] = None
+        self._slow_infer = 0
+
+        self.mqtt_connected = threading.Event()
+        self.mqtt = self._make_mqtt()
+
+        self.outbox: Optional[Outbox] = None
+        self.cloud: Optional[CloudForwarder] = None
+        self._last_cloud_push = 0.0
+        self.cloud_period = float(os.getenv("CLOUD_PERIOD_S", "5"))
+        if not args.no_cloud:
+            self._setup_cloud()
+        self.sim: Optional[SimulatedNodes] = None
+
+    # ---- MQTT -------------------------------------------------------------
+    def _make_mqtt(self) -> "mqtt.Client":
+        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="smart-workstation-gateway")
+        c.will_set(TOPIC_STATUS, "offline", qos=1, retain=True)
+        c.reconnect_delay_set(1, 30)
+
+        def on_connect(client, _ud, _flags, reason_code, _props):
+            if reason_code == 0:
+                client.subscribe([(TOPIC_NODE1, 1), (TOPIC_NODE2, 1)])
+                client.publish(TOPIC_STATUS, "online", qos=1, retain=True)
+                self.mqtt_connected.set()
+                log.info("MQTT connected; subscribed to node1/node2")
+            else:
+                log.error("MQTT connect refused: %s", reason_code)
+
+        def on_disconnect(_client, _ud, _flags, reason_code, _props):
+            self.mqtt_connected.clear()
+            if not self.stop_evt.is_set():
+                log.warning("MQTT disconnected (%s); auto-reconnecting", reason_code)
+
+        c.on_connect = on_connect
+        c.on_disconnect = on_disconnect
+        c.on_message = lambda _c, _ud, m: self.registry.ingest(m.topic, m.payload)
+        return c
+
+    # ---- Cloud ------------------------------------------------------------
+    def _setup_cloud(self) -> None:
+        self.outbox = Outbox(BASE_DIR / "outbox.db")
+        cred = os.getenv("FIREBASE_CREDENTIALS_PATH", "")
+        uploader: Any = None
+        if is_configured(cred) and Path(cred).exists():
             try:
-                self.mqtt_client.loop_stop()
-                self.mqtt_client.disconnect()
-            except Exception:
-                pass
+                uploader = FirestoreUploader(cred, os.getenv("FIRESTORE_COLLECTION", "telemetry"))
+                log.info("Cloud: Firestore enabled")
+            except Exception as exc:
+                log.error("Cloud: Firestore init failed (%s)", exc)
+        if uploader is None:
+            if self.mock:
+                uploader = DryRunUploader()
+                log.info("Cloud: no credentials -> dry-run uploader (mock mode)")
+            else:
+                log.warning("Cloud: no valid FIREBASE_CREDENTIALS_PATH; buffering in outbox.db only")
+        if uploader is not None:
+            self.cloud = CloudForwarder(self.outbox, uploader)
+
+    # ---- Control loop pieces ---------------------------------------------
+    def _read_local(self) -> Tuple[float, float]:
+        d = self.hw.read_distance_cm()
+        lx = self.hw.read_lux()
+        if d is not None:
+            self._last_distance = d
+        if lx is not None:
+            self._last_lux = lx
+        return (self._last_distance if self._last_distance is not None else 100.0,
+                self._last_lux if self._last_lux is not None else 300.0)
+
+    def _sitting_minutes(self, snap: Dict[str, Any]) -> float:
+        if not snap["seat"]:
+            self._seat_since = None
+            return 0.0
+        if snap["sitting_min"] is not None:
+            return float(snap["sitting_min"])
+        if self._seat_since is None:  # Node 1 didn't send a duration: fall back to a local timer
+            self._seat_since = time.monotonic()
+        return (time.monotonic() - self._seat_since) / 60.0
+
+    def _debounce(self, class_id: int) -> bool:
+        """Accept a new class only after 2 consecutive identical predictions (anti-flapping)."""
+        if class_id == self._active_class:
+            self._pending_class, self._pending_n = class_id, 0
+            return False
+        if class_id == self._pending_class:
+            self._pending_n += 1
+        else:
+            self._pending_class, self._pending_n = class_id, 1
+        if self._pending_n >= 2:
+            self._active_class, self._pending_n = class_id, 0
+            return True
+        return False
+
+    def _actuate(self, class_id: int, seat: bool) -> None:
+        """Class -> actuator mapping. The class itself comes from the trained model."""
+        servo = SERVO_REST_DEG
+        if class_id == 1:      # TOO_DARK
+            self.curtain.command("OPEN")
+            self.led_duty = min(100.0, self.led_duty + LED_STEP_PCT)
+        elif class_id == 2:    # TOO_BRIGHT_GLARE
+            self.curtain.command("CLOSED")
+            self.led_duty = max(0.0, self.led_duty - LED_STEP_PCT)
+        elif class_id == 4:    # TOO_HOT
+            self.curtain.command("CLOSED")
+        elif class_id == 5:    # POOR_POSTURE
+            servo = SERVO_NUDGE_DEG
+        elif class_id == 6:    # NEEDS_BREAK
+            servo = SERVO_BREAK_DEG
+        # classes 0 and 3 hold the current curtain/LED state
+        if not seat:
+            self.led_duty = min(self.led_duty, LED_IDLE_CAP_PCT)
+        self.hw.set_led_duty(self.led_duty)
+        if servo != self.servo_angle:
+            self.servo_angle = servo
+            self.hw.set_servo_angle(servo)
+
+    def _cycle(self) -> None:
+        snap = self.registry.snapshot()
+        distance, lux = self._read_local()
+        sitting = self._sitting_minutes(snap)
+        feats = [1.0 if snap["seat"] else 0.0, distance, lux, snap["temp"], snap["sound"], sitting]
+
+        ai = self.ai.predict(feats)  # M4
+        if ai["latency_ms"] > AI_LATENCY_BUDGET_MS:
+            self._slow_infer += 1
+            if self._slow_infer in (1, 10, 100):
+                log.warning("AI inference %.2f ms exceeds %.0f ms budget (x%d)",
+                            ai["latency_ms"], AI_LATENCY_BUDGET_MS, self._slow_infer)
+
+        changed = self._debounce(ai["class_id"])
+        self._actuate(self._active_class, snap["seat"])  # M2, closed loop
+        if changed and self._active_class != 0:
+            info = CLASS_INFO[self._active_class]
+            self.alerts.notify(self._active_class, f"Smart Workstation: {info['name']}", info["advice"])
+
+        now = time.time()
+        payload = {
+            "seat": snap["seat"],
+            "distance": round(distance, 1),
+            "light": round(lux, 1),
+            "temp": round(snap["temp"], 1),
+            "sound": round(snap["sound"], 1),
+            "sitting_duration_min": round(sitting, 1),
+            "curtain_state": self.curtain.state,
+            "led_duty_cycle": round(self.led_duty, 1),
+            "servo_angle": round(self.servo_angle, 1),
+            "ai_state": ai,
+            "node_status": snap["node_status"],  # extra key; dashboard may ignore it
+            "timestamp": round(now, 2),
+        }
+        if self.mqtt_connected.is_set():
+            self.mqtt.publish(TOPIC_TELEMETRY, json.dumps(payload), qos=0, retain=True)
+
+        if self.outbox is not None and self.cloud is not None and now - self._last_cloud_push >= self.cloud_period:
+            self._last_cloud_push = now
+            self.outbox.put(now, payload)
+
+        log.info("seat=%d dist=%5.1fcm lux=%6.1f T=%4.1fC snd=%4.1fdB sit=%5.1fm -> %-16s (%.2f, %.2fms) "
+                 "| LED %3.0f%% curtain %-7s servo %3.0f | n1=%s n2=%s",
+                 snap["seat"], distance, lux, snap["temp"], snap["sound"], sitting,
+                 ai["class_name"], ai["confidence"], ai["latency_ms"],
+                 self.led_duty, self.curtain.state, self.servo_angle,
+                 snap["node_status"]["node1"], snap["node_status"]["node2"])
+
+    # ---- Lifecycle --------------------------------------------------------
+    def run(self) -> None:
+        signal.signal(signal.SIGINT, lambda *_: self.stop_evt.set())
+        signal.signal(signal.SIGTERM, lambda *_: self.stop_evt.set())
+
+        self.mqtt.connect_async(self.args.broker, self.args.port, keepalive=30)
+        self.mqtt.loop_start()
+        connected = self.mqtt_connected.wait(2.0)
+        if not connected:
+            log.warning("MQTT broker %s:%d not reachable yet (still retrying in background)",
+                        self.args.broker, self.args.port)
+        if self.args.sim_nodes or (self.mock and not connected):
+            log.info("Using SIMULATED Node 1 / Node 2 data")
+            self.sim = SimulatedNodes(self.registry)
+            self.sim.start()
+
+        self.curtain.start()
+        if self.cloud:
+            self.cloud.start()
+
+        deadline = time.monotonic() + self.args.duration if self.args.duration > 0 else None
+        next_tick = time.monotonic()
+        log.info("Gateway running (%s hardware, %.1f s cycle). Ctrl+C to stop.",
+                 "MOCK" if self.mock else "RPi", self.args.interval)
+        try:
+            while not self.stop_evt.is_set():
+                try:
+                    self._cycle()
+                except Exception:  # one bad cycle must never kill the daemon
+                    log.exception("Control cycle failed")
+                next_tick += self.args.interval
+                if deadline and time.monotonic() >= deadline:
+                    break
+                self.stop_evt.wait(max(0.0, next_tick - time.monotonic()))
+        finally:
+            self.shutdown()
+
+    def shutdown(self) -> None:
+        log.info("Shutting down (node stats: %s)", self.registry.stats)
+        if self.sim:
+            self.sim.stop()
+        self.curtain.stop()
+        if self.cloud:
+            self.cloud.stop()
+        if self.outbox:
+            log.info("Outbox pending rows: %d", self.outbox.count())
+        try:
+            self.mqtt.publish(TOPIC_STATUS, "offline", qos=1, retain=True)
+            self.mqtt.loop_stop()
+            self.mqtt.disconnect()
+        except Exception:
+            pass
+        self.hw.set_led_duty(0.0)
         self.hw.cleanup()
-        logger.info("Gateway daemon stopped cleanly.")
+
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    load_dotenv(BASE_DIR / ".env")
+    p = argparse.ArgumentParser(description="Smart Workstation Gateway")
+    p.add_argument("--mock", action="store_true",
+                   default=os.getenv("MOCK_HARDWARE", "false").lower() == "true",
+                   help="use simulated GPIO/I2C hardware (and simulated nodes if no broker)")
+    p.add_argument("--broker", default=os.getenv("MQTT_BROKER_HOST", "localhost"))
+    p.add_argument("--port", type=int, default=int(os.getenv("MQTT_BROKER_PORT", "1883")))
+    p.add_argument("--model", default=str(MODEL_PATH))
+    p.add_argument("--interval", type=float, default=1.0, help="control loop period in seconds")
+    p.add_argument("--duration", type=float, default=0.0, help="exit after N seconds (0 = run forever)")
+    p.add_argument("--sim-nodes", action="store_true", help="force simulated Node 1/2 even if a broker is up")
+    p.add_argument("--no-cloud", action="store_true", help="disable the outbox and Firestore forwarding")
+    p.add_argument("-v", "--verbose", action="store_true")
+    return p.parse_args(argv)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Smart Workstation Raspberry Pi Gateway & AI Daemon")
-    parser.add_argument("--broker", type=str, default=os.getenv("MQTT_BROKER", "localhost"), help="MQTT broker hostname")
-    parser.add_argument("--port", type=int, default=int(os.getenv("MQTT_PORT", 1883)), help="MQTT broker port")
-    parser.add_argument("--mock", action="store_true", help="Force hardware simulation / mock mode")
-    parser.add_argument("--model", type=str, default=str(Path(__file__).parent / "model.joblib"), help="Path to trained AI model")
-    args = parser.parse_args()
-
-    gateway = SmartWorkstationGateway(
-        broker_host=args.broker,
-        broker_port=args.port,
-        mock_hardware=args.mock,
-        model_path=args.model,
-    )
-
-    # Attach signal handlers for graceful shutdown on SIGINT and SIGTERM
-    def signal_handler(sig: int, frame: Any) -> None:
-        logger.info("Caught signal %d. Triggering graceful shutdown...", sig)
-        gateway.stop()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    gateway.start()
+    args = parse_args()
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    Gateway(args).run()
 
 
 if __name__ == "__main__":
     main()
 
+
+# =============================================================================
+# PLACEHOLDERS / CREDENTIALS -- nothing secret lives in this file (E5 / M8).
+# Copy .env.example to .env (git-ignored) and replace the YOUR_... values:
+#
+#   DISCORD_WEBHOOK_URL         Discord: channel Settings > Integrations > Webhooks > New Webhook > Copy URL.
+#   LINE_CHANNEL_ACCESS_TOKEN   LINE Developers console > Messaging API channel > issue a long-lived token.
+#   LINE_TO_USER_ID             User/group ID that receives pushes (from the bot's webhook events).
+#                               NOTE: LINE Notify (LINE_NOTIFY_TOKEN in AGENTS.md) ended on 2025-03-31,
+#                               so alerts use the LINE Messaging API push endpoint instead.
+#   FIREBASE_CREDENTIALS_PATH   Firebase console > Project settings > Service accounts > Generate new
+#                               private key; save the JSON outside git (e.g. ~/secrets/) and put its path here.
+#   FIRESTORE_COLLECTION        Target collection (default "telemetry").
+#
+# Any value that is empty or still contains "YOUR_" / "..." is treated as "not configured":
+# alerts are logged as dry-runs and cloud rows stay buffered in outbox.db (mock mode flushes them to a dry-run sink).
+# =============================================================================
