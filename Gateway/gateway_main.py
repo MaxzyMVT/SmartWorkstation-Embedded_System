@@ -443,20 +443,29 @@ class CloudForwarder(threading.Thread):
         super().__init__(daemon=True, name="cloud")
         self.outbox, self.uploader = outbox, uploader
         self._halt = threading.Event()
+        self._wake = threading.Event()
 
     def stop(self) -> None:
         self._halt.set()
+        self._wake.set()
+
+    def notify(self) -> None:
+        self._wake.set()
 
     def run(self) -> None:
-        backoff = 2.0
-        while not self._halt.wait(backoff):
+        backoff = 0.5
+        while not self._halt.is_set():
+            self._wake.wait(backoff)
+            self._wake.clear()
+            if self._halt.is_set():
+                break
             rows = self.outbox.peek(100)
             if not rows:
-                backoff = 2.0
+                backoff = 0.5
                 continue
             if self.uploader.upload(rows):
                 self.outbox.delete([r[0] for r in rows])
-                backoff = 2.0
+                backoff = 0.5
             else:
                 backoff = min(backoff * 2, 60.0)  # offline: keep buffering, back off
 
@@ -680,6 +689,7 @@ class Gateway:
         if self.outbox is not None and self.cloud is not None and now - self._last_cloud_push >= self.cloud_period:
             self._last_cloud_push = now
             self.outbox.put(now, payload)
+            self.cloud.notify()
 
         log.info("seat=%d dist=%5.1fcm lux=%6.1f T=%4.1fC snd=%4.1fdB sit=%5.1fm -> %-16s (%.2f, %.2fms) "
                  "| LED %3.0f%% curtain %-7s servo %3.0f | n1=%s n2=%s",
