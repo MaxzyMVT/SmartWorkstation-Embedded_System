@@ -165,7 +165,21 @@ void vTaskSessionTimer(void *) {
     accountUntil(now);
     if (!preparingSleep && seat.ready && (!reported || seat.presence != previousPresence ||
                         now - lastReport >= 1000000)) {
+      const bool isStateChange = (seat.presence != previousPresence);
       const Telemetry packet{seat.presence, seat.sittingUs, ++sequence};
+
+      // Priority dispatch for state changes: flush stale packets so seated/empty updates immediately!
+      if (isStateChange) {
+        Telemetry discard;
+        while (xQueueReceive(telemetryQueue, &discard, 0) == pdTRUE) {}
+      } else {
+        // Prevent buffer lag: keep at most 2 packets in queue during network stalls
+        while (uxQueueMessagesWaiting(telemetryQueue) >= 3) {
+          Telemetry discard;
+          xQueueReceive(telemetryQueue, &discard, 0);
+        }
+      }
+
       if (xQueueSend(telemetryQueue, &packet, 0) != pdTRUE)
         Serial.printf("Telemetry queue full: dropped seq=%lu\n", static_cast<unsigned long>(sequence));
 
@@ -200,6 +214,12 @@ void vTaskTelemetrySend(void *) {
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
     WiFi.begin(NODE1_WIFI_SSID, NODE1_WIFI_PASSWORD);
+
+    // Give Wi-Fi up to 4s to obtain IP before starting MQTT client to prevent DNS lookup errors
+    const uint32_t wifiStart = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 4000) {
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
     esp_mqtt_client_config_t config{};
     config.host = NODE1_MQTT_BROKER_HOST;
     config.port = NODE1_MQTT_BROKER_PORT;
