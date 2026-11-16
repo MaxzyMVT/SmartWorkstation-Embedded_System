@@ -148,3 +148,7 @@ serviceAccountKey*.json
 # SQLite database
 *.db
 outbox.db
+
+# Firebase CLI cache & deploy artifacts
+.firebase/
+firebase-debug.log*
