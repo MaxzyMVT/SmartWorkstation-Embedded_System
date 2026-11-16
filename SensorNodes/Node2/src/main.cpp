@@ -59,7 +59,8 @@ static_assert(NODE2_SOUND_REFERENCE_COUNTS > 0, "Reference must be positive");
 void vTaskSoundSample(void *) {
   analogReadResolution(12);
   analogSetPinAttenuation(kSoundPin, ADC_11db);
-  float smoothedDb = 42.0f; // Initial estimate for quiet room
+  float peakDb = 42.0f;  // Peak decibel hold with smooth decay
+  float peakAmp = 60.0f; // Peak amplitude hold with smooth decay
 
   for (;;) {
     uint16_t low = 4095, high = 0;
@@ -74,20 +75,30 @@ void vTaskSoundSample(void *) {
     const float amplitude = high > low ? static_cast<float>(high - low) : 1.0f;
 
     // Logarithmic acoustic decibel estimation relative to 400 counts @ 58 dB
-    float calculatedDb = NODE2_SOUND_REFERENCE_DB +
+    float instDb = NODE2_SOUND_REFERENCE_DB +
         20.0f * log10f(amplitude / NODE2_SOUND_REFERENCE_COUNTS);
 
     // Realistic physical acoustic clamping:
-    // Floor: 36.0 dB (real-world quiet room noise floor; eliminates fake 20 dB glitch)
-    // Ceiling: 88.0 dB (loud clapping or close shouting)
-    if (calculatedDb < 36.0f) calculatedDb = 36.0f;
-    if (calculatedDb > 88.0f) calculatedDb = 88.0f;
+    // Floor: 36.0 dB, Ceiling: 88.0 dB
+    if (instDb < 36.0f) instDb = 36.0f;
+    if (instDb > 88.0f) instDb = 88.0f;
 
-    // Fast attack on acoustic transients (0.35) and smooth decay on silence (0.12)
-    const float alpha = (calculatedDb > smoothedDb) ? 0.35f : 0.12f;
-    smoothedDb = smoothedDb + alpha * (calculatedDb - smoothedDb);
+    // Peak Program Meter (PPM) ballistic response:
+    // 1. Instant attack: instantaneous sound spikes (claps/shouts) are NEVER dampened.
+    // 2. Controlled release: decay of 0.5 dB per 50 ms (~10 dB/s) so peaks stay visible.
+    if (instDb >= peakDb) {
+      peakDb = instDb;
+    } else {
+      peakDb = (peakDb > 36.5f) ? (peakDb - 0.5f) : 36.0f;
+    }
 
-    Reading reading{smoothedDb, amplitude, millis()};
+    if (amplitude >= peakAmp) {
+      peakAmp = amplitude;
+    } else {
+      peakAmp = (peakAmp > 2.0f) ? (peakAmp * 0.93f) : 1.0f;
+    }
+
+    Reading reading{peakDb, peakAmp, millis()};
     xQueueOverwrite(soundQueue, &reading);
     vTaskDelay(1); // Let idle/watchdog run after every bounded window.
   }
