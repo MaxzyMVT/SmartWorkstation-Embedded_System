@@ -139,10 +139,9 @@ void vTaskSeatSample(void *) {
       seat.presence = occupied;
       seat.vacantSinceUs = occupied ? 0 : now;
       seat.ready = true;
-      Serial.printf(">>> [Seat Event] State changed to: %s (digital=%s, adc=%d) <<<\n",
+      Serial.printf(">>> [Seat Event] State changed to: %s (Pin33=%s) <<<\n",
                     occupied ? "OCCUPIED (Seated)" : "EMPTY (Standing)",
-                    occupied ? "HIGH" : "LOW",
-                    analogRead(kSeatPin));
+                    occupied ? "HIGH" : "LOW");
     }
     xSemaphoreGive(stateMutex);
     xSemaphoreGive(telemetryWake);
@@ -164,13 +163,11 @@ void vTaskSessionTimer(void *) {
         Serial.printf("Telemetry queue full: dropped seq=%lu\n", static_cast<unsigned long>(sequence));
 
       const float durationMin = static_cast<float>(seat.sittingUs / 60000000.0);
-      const int rawAdc = analogRead(kSeatPin);
       const int pinDigital = digitalRead(kSeatPin);
 
-      Serial.printf("[Node1 Monitor] Presence: %-8s | Pin33: %s (adc:%-4d) | Sitting: %.2f min | Seq: %lu\n",
+      Serial.printf("[Node1 Monitor] Presence: %-8s | Pin33: %-4s | Sitting: %.2f min | Seq: %lu\n",
                     seat.presence ? "OCCUPIED" : "EMPTY",
-                    pinDigital ? "HIGH" : "LOW ",
-                    rawAdc,
+                    pinDigital ? "HIGH" : "LOW",
                     durationMin,
                     static_cast<unsigned long>(sequence));
 
