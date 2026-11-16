@@ -14,13 +14,13 @@ import {
 import { subscribeToWorkstationTelemetry } from './telemetryService';
 
 const RFC_STATES = {
-  0: { name: 'Optimal Study', advice: 'All metrics in healthy ergonomic range', isError: false },
-  1: { name: 'Too Dark', advice: 'Natural light low — Curtain opening & lamp brightening', isError: true },
-  2: { name: 'Glare / Too Bright', advice: 'Direct sunlight glare detected — Curtain closing', isError: true },
-  3: { name: 'High Acoustic Noise', advice: 'Ambient noise > 65 dB — Consider quiet zone or headphones', isError: true },
-  4: { name: 'High Temperature', advice: 'Room temp > 28°C — Curtain closing to mitigate solar heat', isError: true },
-  5: { name: 'Poor Posture (Too Close)', advice: 'Distance < 30 cm — Posture nudge servo activated', isError: true },
-  6: { name: 'Break Recommended', advice: 'Continuous sitting > 60 min — Stand up and stretch', isError: true },
+  0: { name: 'Optimal Study', advice: 'Posture and study environment are optimal', type: 'optimal' },
+  1: { name: 'Text Neck (Too Close)', advice: 'Head too close (<28cm)! Straighten neck and sit back', type: 'alert' },
+  2: { name: 'Slouching (Too Far)', advice: 'Slouching too far back (>65cm)! Align spine upright', type: 'alert' },
+  3: { name: 'Poor Lighting', advice: 'Unsuitable lighting! Adjusting LED lamp and curtain', type: 'alert' },
+  4: { name: 'Noisy / Hot Fatigue', advice: 'High noise (>60dB) or heat (>30°C) causing fatigue', type: 'alert' },
+  5: { name: 'Break Timer Reached', advice: '50-minute study interval reached! Stand up and rest your eyes', type: 'alert' },
+  6: { name: 'Workstation Vacant (Away)', advice: 'Workstation vacant. Power saving active', type: 'idle' },
 };
 
 export default function App() {
@@ -77,11 +77,31 @@ export default function App() {
   const activeClassId = telemetry.ai_state?.class_id ?? 0;
   const currentRfc = RFC_STATES[activeClassId] || {
     name: telemetry.ai_state?.class_name || 'Autonomous AI Active',
-    advice: 'Closed-loop intelligence managing workstation environment',
-    isError: activeClassId !== 0
+    advice: telemetry.ai_state?.advice || 'Closed-loop intelligence managing workstation environment',
+    type: activeClassId === 0 ? 'optimal' : activeClassId === 6 ? 'idle' : 'alert'
   };
 
-  const isGlobalAlert = currentRfc.isError || !telemetry.seat;
+  const adviceText = telemetry.ai_state?.advice || currentRfc.advice;
+  const isAlert = currentRfc.type === 'alert';
+  const isIdle = currentRfc.type === 'idle' || !telemetry.seat;
+
+  const bannerBg = isAlert 
+    ? 'bg-[#FFF0F2] border-[#FFCBD3]' 
+    : isIdle 
+    ? 'bg-slate-50 border-slate-200' 
+    : 'bg-[#E5FDEB] border-green-200';
+
+  const iconBoxStyle = isAlert
+    ? 'bg-white text-rose-500 border-rose-200'
+    : isIdle
+    ? 'bg-white text-slate-500 border-slate-200'
+    : 'bg-white text-emerald-600 border-emerald-200';
+
+  const badgeStyle = isAlert
+    ? 'bg-rose-100 text-rose-700'
+    : isIdle
+    ? 'bg-slate-200 text-slate-700'
+    : 'bg-emerald-100 text-emerald-800';
 
   // Format study session duration
   const sittingMin = telemetry.sitting_duration_min || 0;
@@ -129,27 +149,21 @@ export default function App() {
       </header>
 
       {/* AI Ergonomic Closed-Loop Status Banner */}
-      <section className={`rounded-2xl p-5 sm:p-6 border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm ${
-        isGlobalAlert ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-[#E5FDEB] border-green-200'
-      }`}>
+      <section className={`rounded-2xl p-5 sm:p-6 border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm ${bannerBg}`}>
         <div className="flex items-start sm:items-center gap-4">
-          <div className={`p-2.5 rounded-xl border flex-shrink-0 ${
-            isGlobalAlert ? 'bg-white text-rose-500 border-rose-200' : 'bg-white text-emerald-600 border-emerald-200'
-          }`}>
-            {isGlobalAlert ? <AlertTriangle className="w-7 h-7" /> : <CheckCircle2 className="w-7 h-7" />}
+          <div className={`p-2.5 rounded-xl border flex-shrink-0 ${iconBoxStyle}`}>
+            {isAlert ? <AlertTriangle className="w-7 h-7" /> : <CheckCircle2 className="w-7 h-7" />}
           </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900">
                 {currentRfc.name}
               </h2>
-              <span className={`text-[11px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
-                isGlobalAlert ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'
-              }`}>
+              <span className={`text-[11px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${badgeStyle}`}>
                 {telemetry.curtain_state === 'CLOSED' ? 'Curtain Closed' : 'Curtain Open'}
               </span>
             </div>
-            <p className="text-xs sm:text-sm text-slate-600 mt-0.5">{currentRfc.advice}</p>
+            <p className="text-xs sm:text-sm text-slate-600 mt-0.5">{adviceText}</p>
           </div>
         </div>
 
