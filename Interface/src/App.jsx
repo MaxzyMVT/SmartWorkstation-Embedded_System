@@ -1,184 +1,418 @@
 import React, { useState, useEffect } from 'react';
-import { RotateCcw, CheckCircle2, XCircle, Edit3, Save, Armchair, User, Sun, Thermometer, Volume2 } from 'lucide-react';
-import { subscribeToLatestTelemetry } from './firebase';
+import { 
+  Armchair, 
+  User, 
+  Sun, 
+  Thermometer, 
+  Volume2, 
+  Clock, 
+  CheckCircle2, 
+  AlertTriangle, 
+  Cpu, 
+  Activity
+} from 'lucide-react';
+import { subscribeToWorkstationTelemetry } from './telemetryService';
 
-const DEFAULT_THRESHOLDS = {
-  distance: { min: 30, max: 60, unit: 'cm' },
-  light: { min: 300, max: 990, unit: 'Lux' },
-  temp: { min: 22, max: 27, unit: '°C' },
-  sound: { min: 0, max: 40, unit: 'dB' }
+const RFC_STATES = {
+  0: { name: 'Optimal Study', advice: 'All metrics in healthy ergonomic range', isError: false },
+  1: { name: 'Too Dark', advice: 'Natural light low — Curtain opening & lamp brightening', isError: true },
+  2: { name: 'Glare / Too Bright', advice: 'Direct sunlight glare detected — Curtain closing', isError: true },
+  3: { name: 'High Acoustic Noise', advice: 'Ambient noise > 65 dB — Consider quiet zone or headphones', isError: true },
+  4: { name: 'High Temperature', advice: 'Room temp > 28°C — Curtain closing to mitigate solar heat', isError: true },
+  5: { name: 'Poor Posture (Too Close)', advice: 'Distance < 30 cm — Posture nudge servo activated', isError: true },
+  6: { name: 'Break Recommended', advice: 'Continuous sitting > 60 min — Stand up and stretch', isError: true },
 };
 
 export default function App() {
-  const [isEditing, setIsEditing] = useState(false);
-  const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
-  
-  const [sensorValues, setSensorValues] = useState({
+  const [connectionStatus, setConnectionStatus] = useState('Connecting...');
+  const [telemetry, setTelemetry] = useState({
     seat: true,
-    distance: 50,
-    light: 430,
-    temp: 24.7,
-    sound: 35
+    distance: 42.5,
+    light: 450.0,
+    temp: 25.6,
+    sound: 35.0,
+    sitting_duration_min: 14.5,
+    curtain_state: 'OPEN',
+    led_duty_cycle: 65.0,
+    servo_angle: 85.0,
+    ai_state: {
+      class_id: 0,
+      class_name: 'OPTIMAL_STUDY',
+      confidence: 0.96,
+      latency_ms: 0.45
+    },
+    timestamp: Date.now() / 1000,
+    _source: 'init'
   });
 
   useEffect(() => {
-    // If Firebase Project ID is configured, subscribe to live Cloud Firestore updates
-    if (import.meta.env.VITE_FIREBASE_PROJECT_ID) {
-      const unsubscribe = subscribeToLatestTelemetry(
-        (data) => {
-          setSensorValues({
-            seat: data.seat ?? true,
-            distance: Math.round(data.distance ?? 50),
-            light: Math.round(data.light ?? 430),
-            temp: Number(Number(data.temp ?? 24.7).toFixed(1)),
-            sound: Math.round(data.sound ?? 35)
-          });
-        },
-        () => {
-          // If offline or network issue, fallback gracefully
-        }
-      );
-      return () => unsubscribe();
-    }
+    const unsubscribe = subscribeToWorkstationTelemetry(
+      (data) => {
+        setTelemetry((prev) => ({
+          ...prev,
+          seat: data.seat !== undefined ? Boolean(data.seat) : prev.seat,
+          distance: data.distance !== undefined ? Number(data.distance) : prev.distance,
+          light: data.light !== undefined ? Number(data.light) : prev.light,
+          temp: data.temp !== undefined ? Number(data.temp) : prev.temp,
+          sound: data.sound !== undefined ? Number(data.sound) : prev.sound,
+          sitting_duration_min: data.sitting_duration_min !== undefined 
+            ? Number(data.sitting_duration_min) 
+            : prev.sitting_duration_min,
+          curtain_state: data.curtain_state || prev.curtain_state,
+          led_duty_cycle: data.led_duty_cycle !== undefined ? Number(data.led_duty_cycle) : prev.led_duty_cycle,
+          servo_angle: data.servo_angle !== undefined ? Number(data.servo_angle) : prev.servo_angle,
+          ai_state: data.ai_state || prev.ai_state,
+          timestamp: data.timestamp || Date.now() / 1000,
+          _source: data._source || prev._source
+        }));
+      },
+      (status) => {
+        setConnectionStatus(status);
+      }
+    );
 
-    // Fallback: Local simulated stream when no Firebase config is present
-    const interval = setInterval(() => {
-      setSensorValues(prev => ({
-        ...prev,
-        distance: prev.distance + (Math.random() > 0.5 ? 1 : -1),
-        light: prev.light + Math.floor(Math.random() * 10 - 5),
-        temp: +(prev.temp + (Math.random() * 0.2 - 0.1)).toFixed(1),
-        sound: prev.sound + Math.floor(Math.random() * 4 - 2)
-      }));
-    }, 2000);
-    return () => clearInterval(interval);
+    return () => unsubscribe();
   }, []);
 
-  const isGlobalError = 
-    !sensorValues.seat ||
-    sensorValues.distance < thresholds.distance.min || sensorValues.distance > thresholds.distance.max ||
-    sensorValues.light < thresholds.light.min || sensorValues.light > thresholds.light.max ||
-    sensorValues.temp < thresholds.temp.min || sensorValues.temp > thresholds.temp.max ||
-    sensorValues.sound < thresholds.sound.min || sensorValues.sound > thresholds.sound.max;
-
-  const handleThresholdChange = (sensor, type, value) => {
-    setThresholds(prev => ({
-      ...prev,
-      [sensor]: { ...prev[sensor], [type]: Number(value) }
-    }));
+  const activeClassId = telemetry.ai_state?.class_id ?? 0;
+  const currentRfc = RFC_STATES[activeClassId] || {
+    name: telemetry.ai_state?.class_name || 'Autonomous AI Active',
+    advice: 'Closed-loop intelligence managing workstation environment',
+    isError: activeClassId !== 0
   };
 
-  const resetToDefault = () => {
-    setThresholds(DEFAULT_THRESHOLDS);
-    setIsEditing(false);
-  };
+  const isGlobalAlert = currentRfc.isError || !telemetry.seat;
 
-  const toggleSeat = () => {
-    setSensorValues(prev => ({ ...prev, seat: !prev.seat }));
-  };
-
-  const isSeatError = !sensorValues.seat;
+  // Format study session duration
+  const sittingMin = telemetry.sitting_duration_min || 0;
+  const hrs = Math.floor(sittingMin / 60);
+  const mins = Math.floor(sittingMin % 60);
+  const formattedSessionTime = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m ${Math.floor((sittingMin % 1) * 60)}s`;
 
   return (
-    <div className="min-h-screen bg-[#F4F7F9] p-8 font-sans text-slate-800 flex flex-col gap-4">
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex flex-col gap-4">
-        <div className="flex items-center gap-4">
-          <h1 className="text-4xl font-bold tracking-tight">Smart Workstation</h1>
-          <span className="bg-slate-100 text-slate-500 px-3 py-1 rounded-md text-sm font-medium">Auto-Detect</span>
+    <div className="min-h-screen bg-[#F4F7F9] p-4 sm:p-6 md:p-8 font-sans text-slate-800 flex flex-col gap-4 max-w-7xl mx-auto">
+      
+      {/* Header Card */}
+      <header className="bg-white rounded-2xl p-5 sm:p-6 shadow-sm border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
+          <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight">Smart Workstation</h1>
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">
+              <Cpu size={14} className="text-indigo-500" /> RFC Model
+            </span>
+            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+              connectionStatus.includes('Live') 
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                : connectionStatus.includes('Sync')
+                ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                : 'bg-amber-50 text-amber-700 border border-amber-200'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${
+                connectionStatus.includes('Live') 
+                  ? 'bg-emerald-500 animate-pulse' 
+                  : connectionStatus.includes('Sync')
+                  ? 'bg-blue-500'
+                  : 'bg-amber-500'
+              }`}></span>
+              {connectionStatus}
+            </span>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          {isEditing ? (
-            <button onClick={() => setIsEditing(false)} className="flex items-center gap-2 bg-[#22C55E] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-600 transition-colors"><Save size={16} /> Save</button>
-          ) : (
-            <button onClick={() => setIsEditing(true)} className="flex items-center gap-2 bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"><Edit3 size={16} /> Edit</button>
-          )}
-          <button onClick={resetToDefault} className="flex items-center gap-2 bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"><RotateCcw size={16} /> Reset to default</button>
-        </div>
-      </div>
 
-      <div className={`rounded-xl p-4 flex items-center gap-4 border transition-colors ${isGlobalError ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-[#E5FDEB] border-green-200'}`}>
-        {isGlobalError ? <XCircle className="text-red-500 w-8 h-8 flex-shrink-0" /> : <CheckCircle2 className="text-green-600 w-8 h-8 flex-shrink-0" />}
-        <div>
-          <h2 className="text-xl font-bold mb-0.5">{isGlobalError ? 'Curtain is close' : 'Curtain is open'}</h2>
-          <p className="text-sm opacity-80">{isGlobalError ? 'Unsuitable Environment' : 'Suitable Environment'}</p>
+        {/* Live Model Performance Pill */}
+        <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
+          <Activity size={15} className="text-slate-400" />
+          <span>Inference: <strong className="text-slate-700 font-semibold">{Number(telemetry.ai_state?.latency_ms || 0.45).toFixed(2)} ms</strong></span>
+          <span className="text-slate-300">|</span>
+          <span>Conf: <strong className="text-slate-700 font-semibold">{Math.round((telemetry.ai_state?.confidence || 0.95) * 100)}%</strong></span>
         </div>
-      </div>
+      </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        {/* Seat Card */}
-        <div className={`aspect-square rounded-2xl p-6 border flex flex-col transition-colors ${isSeatError ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'}`}>
-          <div className="flex items-center gap-3 font-bold text-xl">
-            <div className={`p-2 rounded-lg border ${isSeatError ? 'bg-[#FFF0F2] text-red-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'}`}>
-              <Armchair size={24} />
+      {/* AI Ergonomic Closed-Loop Status Banner */}
+      <section className={`rounded-2xl p-5 sm:p-6 border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm ${
+        isGlobalAlert ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-[#E5FDEB] border-green-200'
+      }`}>
+        <div className="flex items-start sm:items-center gap-4">
+          <div className={`p-2.5 rounded-xl border flex-shrink-0 ${
+            isGlobalAlert ? 'bg-white text-rose-500 border-rose-200' : 'bg-white text-emerald-600 border-emerald-200'
+          }`}>
+            {isGlobalAlert ? <AlertTriangle className="w-7 h-7" /> : <CheckCircle2 className="w-7 h-7" />}
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900">
+                {currentRfc.name}
+              </h2>
+              <span className={`text-[11px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
+                isGlobalAlert ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'
+              }`}>
+                {telemetry.curtain_state === 'CLOSED' ? 'Curtain Closed' : 'Curtain Open'}
+              </span>
+            </div>
+            <p className="text-xs sm:text-sm text-slate-600 mt-0.5">{currentRfc.advice}</p>
+          </div>
+        </div>
+
+        {/* Actuator closed-loop status strip */}
+        <div className="flex items-center gap-2 sm:gap-3 bg-white/70 backdrop-blur-sm p-2.5 rounded-xl border border-black/5 self-stretch sm:self-auto justify-around sm:justify-start text-xs font-medium text-slate-700">
+          <div className="text-center px-2">
+            <span className="block text-[10px] uppercase font-bold text-slate-400">Curtain</span>
+            <span className="font-bold text-slate-800">{telemetry.curtain_state}</span>
+          </div>
+          <div className="h-6 w-[1px] bg-slate-200"></div>
+          <div className="text-center px-2">
+            <span className="block text-[10px] uppercase font-bold text-slate-400">Desk Lamp</span>
+            <span className="font-bold text-slate-800">{telemetry.led_duty_cycle.toFixed(1)}%</span>
+          </div>
+          <div className="h-6 w-[1px] bg-slate-200"></div>
+          <div className="text-center px-2">
+            <span className="block text-[10px] uppercase font-bold text-slate-400">Nudge Servo</span>
+            <span className="font-bold text-slate-800">{telemetry.servo_angle.toFixed(1)}°</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Grid of Telemetry Cards: 6-Column Responsive Grid */}
+      <main className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+        
+        {/* Card 1: Study Session Time */}
+        <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
+          sittingMin > 60 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
+        }`}>
+          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
+            <div className={`p-2 rounded-lg border ${
+              sittingMin > 60 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+            }`}>
+              <Clock size={20} />
+            </div>
+            Study Time
+          </div>
+
+          <div className="my-auto flex flex-col items-center justify-center text-center py-2">
+            <div className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
+              {sittingMin.toFixed(1)}
+              <span className="text-xs font-semibold text-slate-400 ml-1">min</span>
+            </div>
+            <span className="text-xs text-slate-500 font-medium mt-1">
+              {formattedSessionTime}
+            </span>
+          </div>
+
+          <div className="rounded-xl p-2.5 bg-[#F4F7F9] flex flex-col justify-center">
+            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase mb-1">
+              <span>Goal: &lt;60 min</span>
+              <span className={sittingMin > 60 ? 'text-rose-600' : 'text-slate-500'}>
+                {sittingMin > 60 ? 'Break Due' : 'Active'}
+              </span>
+            </div>
+            <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+              <div 
+                className={`h-full rounded-full transition-all duration-500 ${
+                  sittingMin > 60 ? 'bg-rose-500' : 'bg-emerald-500'
+                }`}
+                style={{ width: `${Math.min(100, (sittingMin / 60) * 100)}%` }}
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 2: Seat Presence */}
+        <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
+          !telemetry.seat ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
+        }`}>
+          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
+            <div className={`p-2 rounded-lg border ${
+              !telemetry.seat ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+            }`}>
+              <Armchair size={20} />
             </div>
             Seat
           </div>
-          <div className="flex-1 flex items-center justify-center text-6xl font-bold tracking-tight">
-            {sensorValues.seat ? 'YES' : 'No'}
+
+          <div className="my-auto flex flex-col items-center justify-center text-center py-2">
+            <div className={`text-3xl sm:text-4xl font-bold tracking-tight ${
+              telemetry.seat ? 'text-emerald-600' : 'text-slate-400'
+            }`}>
+              {telemetry.seat ? 'SEATED' : 'EMPTY'}
+            </div>
+            <span className="text-xs text-slate-400 font-medium mt-1">
+              FSR Mat Pin 33
+            </span>
           </div>
-          {/* Spacer block to perfectly align the centered value with other cards */}
-          <div className="h-[76px]"></div>
+
+          <div className="rounded-xl p-2.5 bg-[#F4F7F9] flex items-center justify-between text-[11px] font-medium text-slate-500">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">State</span>
+            <span className={`font-semibold ${telemetry.seat ? 'text-emerald-600' : 'text-slate-500'}`}>
+              {telemetry.seat ? 'Occupied' : 'Vacant (Sleep)'}
+            </span>
+          </div>
         </div>
 
-        {/* Other Sensors */}
-        {[
-          { key: 'distance', label: 'Distance', val: sensorValues.distance, Icon: User },
-          { key: 'light', label: 'Light', val: sensorValues.light, Icon: Sun },
-          { key: 'temp', label: 'Temperature', val: sensorValues.temp, Icon: Thermometer },
-          { key: 'sound', label: 'Sound', val: sensorValues.sound, Icon: Volume2 }
-        ].map((sensor) => {
-          const isCardError = sensorValues[sensor.key] < thresholds[sensor.key].min || sensorValues[sensor.key] > thresholds[sensor.key].max;
-          const Icon = sensor.Icon;
-          
-          return (
-            <div key={sensor.key} className={`aspect-square rounded-2xl p-6 border flex flex-col transition-colors ${isCardError ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'}`}>
-              <div className="flex items-center gap-3 font-bold text-xl">
-                <div className={`p-2 rounded-lg border ${isCardError ? 'bg-[#FFF0F2] text-red-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'}`}>
-                  <Icon size={24} />
-                </div>
-                {sensor.label}
-              </div>
-              
-              <div className="flex-1 flex items-center justify-center text-6xl font-bold tracking-tight gap-1">
-                {sensor.val}
-                <span className="text-sm font-medium text-slate-400 mt-6">{thresholds[sensor.key].unit}</span>
-              </div>
-
-              <div className="h-[76px] rounded-xl p-3 bg-[#F4F7F9] flex flex-col justify-center">
-                {isEditing ? (
-                  <div className="flex items-center gap-3 justify-center w-full">
-                    <div className="flex flex-col items-start gap-1 w-1/2">
-                      <span className="text-[10px] font-bold text-slate-400 capitalize">Min</span>
-                      <input 
-                        type="number" 
-                        value={thresholds[sensor.key].min} 
-                        onChange={(e) => handleThresholdChange(sensor.key, 'min', e.target.value)} 
-                        className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded text-left font-medium text-slate-700 bg-white focus:outline-none focus:border-slate-300"
-                      />
-                    </div>
-                    <div className="flex flex-col items-start gap-1 w-1/2">
-                      <span className="text-[10px] font-bold text-slate-400 capitalize">Max</span>
-                      <input 
-                        type="number" 
-                        value={thresholds[sensor.key].max} 
-                        onChange={(e) => handleThresholdChange(sensor.key, 'max', e.target.value)} 
-                        className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded text-left font-medium text-slate-700 bg-white focus:outline-none focus:border-slate-300"
-                      />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center">
-                    <div className="text-[10px] font-bold text-slate-400 mb-0.5">ACCEPTABLE RANGE</div>
-                    <div className="text-sm font-medium text-slate-500">
-                      {thresholds[sensor.key].min} - {thresholds[sensor.key].max} {thresholds[sensor.key].unit}
-                    </div>
-                  </div>
-                )}
-              </div>
+        {/* Card 3: Posture Distance */}
+        <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
+          telemetry.distance < 30 || telemetry.distance > 70 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
+        }`}>
+          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
+            <div className={`p-2 rounded-lg border ${
+              telemetry.distance < 30 || telemetry.distance > 70 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+            }`}>
+              <User size={20} />
             </div>
-          );
-        })}
-      </div>
+            Distance
+          </div>
+
+          <div className="my-auto flex flex-col items-center justify-center text-center py-2">
+            <div className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
+              {telemetry.distance.toFixed(1)}
+              <span className="text-xs font-semibold text-slate-400 ml-1">cm</span>
+            </div>
+            <span className="text-xs text-slate-400 font-medium mt-1">
+              HC-SR04 Ultrasonic
+            </span>
+          </div>
+
+          <div className="rounded-xl p-2.5 bg-[#F4F7F9] flex flex-col justify-center">
+            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase mb-1">
+              <span>Ergonomic Zone</span>
+              <span className={telemetry.distance < 30 ? 'text-rose-600' : 'text-slate-500'}>
+                {telemetry.distance < 30 ? 'Too Close' : 'Optimal'}
+              </span>
+            </div>
+            <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+              <div 
+                className={`h-full rounded-full transition-all duration-500 ${
+                  telemetry.distance < 30 ? 'bg-rose-500' : 'bg-emerald-500'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(10, (telemetry.distance / 80) * 100))}%` }}
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 4: Ambient Light */}
+        <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
+          telemetry.light < 300 || telemetry.light > 1000 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
+        }`}>
+          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
+            <div className={`p-2 rounded-lg border ${
+              telemetry.light < 300 || telemetry.light > 1000 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+            }`}>
+              <Sun size={20} />
+            </div>
+            Light
+          </div>
+
+          <div className="my-auto flex flex-col items-center justify-center text-center py-2">
+            <div className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
+              {telemetry.light.toFixed(1)}
+              <span className="text-xs font-semibold text-slate-400 ml-1">Lux</span>
+            </div>
+            <span className="text-xs text-slate-400 font-medium mt-1">
+              BH1750 I2C
+            </span>
+          </div>
+
+          <div className="rounded-xl p-2.5 bg-[#F4F7F9] flex flex-col justify-center">
+            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase mb-1">
+              <span>Standard: 300–800</span>
+              <span className={telemetry.light < 300 ? 'text-amber-600' : telemetry.light > 1000 ? 'text-rose-600' : 'text-slate-500'}>
+                {telemetry.light < 300 ? 'Dim' : telemetry.light > 1000 ? 'Glare' : 'Ideal'}
+              </span>
+            </div>
+            <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+              <div 
+                className={`h-full rounded-full transition-all duration-500 ${
+                  telemetry.light < 300 ? 'bg-amber-500' : telemetry.light > 1000 ? 'bg-rose-500' : 'bg-emerald-500'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(5, (telemetry.light / 1200) * 100))}%` }}
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 5: Temperature */}
+        <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
+          telemetry.temp > 28.0 || telemetry.temp < 20.0 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
+        }`}>
+          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
+            <div className={`p-2 rounded-lg border ${
+              telemetry.temp > 28.0 || telemetry.temp < 20.0 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+            }`}>
+              <Thermometer size={20} />
+            </div>
+            Temp
+          </div>
+
+          <div className="my-auto flex flex-col items-center justify-center text-center py-2">
+            <div className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
+              {telemetry.temp.toFixed(1)}
+              <span className="text-xs font-semibold text-slate-400 ml-1">°C</span>
+            </div>
+            <span className="text-xs text-slate-400 font-medium mt-1">
+              Node 2 GPIO 4
+            </span>
+          </div>
+
+          <div className="rounded-xl p-2.5 bg-[#F4F7F9] flex flex-col justify-center">
+            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase mb-1">
+              <span>Comfort: 22–26°C</span>
+              <span className={telemetry.temp > 28 ? 'text-rose-600' : 'text-slate-500'}>
+                {telemetry.temp > 28 ? 'Too Warm' : 'Comfort'}
+              </span>
+            </div>
+            <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+              <div 
+                className={`h-full rounded-full transition-all duration-500 ${
+                  telemetry.temp > 28 ? 'bg-rose-500' : 'bg-emerald-500'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(10, ((telemetry.temp - 15) / 25) * 100))}%` }}
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 6: Acoustic Noise */}
+        <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
+          telemetry.sound > 65.0 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
+        }`}>
+          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
+            <div className={`p-2 rounded-lg border ${
+              telemetry.sound > 65.0 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+            }`}>
+              <Volume2 size={20} />
+            </div>
+            Sound
+          </div>
+
+          <div className="my-auto flex flex-col items-center justify-center text-center py-2">
+            <div className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">
+              {telemetry.sound.toFixed(1)}
+              <span className="text-xs font-semibold text-slate-400 ml-1">dB</span>
+            </div>
+            <span className="text-xs text-slate-400 font-medium mt-1">
+              Node 2 KY-037 Mic
+            </span>
+          </div>
+
+          <div className="rounded-xl p-2.5 bg-[#F4F7F9] flex flex-col justify-center">
+            <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase mb-1">
+              <span>Quiet: &lt;50 dB</span>
+              <span className={telemetry.sound > 65 ? 'text-rose-600' : 'text-slate-500'}>
+                {telemetry.sound > 65 ? 'Noisy' : 'Quiet Focus'}
+              </span>
+            </div>
+            <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+              <div 
+                className={`h-full rounded-full transition-all duration-500 ${
+                  telemetry.sound > 65 ? 'bg-rose-500' : 'bg-emerald-500'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(5, ((telemetry.sound - 30) / 55) * 100))}%` }}
+              ></div>
+            </div>
+          </div>
+        </div>
+
+      </main>
     </div>
   );
 }
