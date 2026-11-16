@@ -138,3 +138,10 @@ dist/
 *.log
 *.tmp
 *.bak
+
+# Firebase service account & secrets
+*firebase*.json
+firebase-credentials.json
+**/firebase-credentials.json
+serviceAccountKey.json
+**/serviceAccountKey.json

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { RotateCcw, CheckCircle2, XCircle, Edit3, Save, Armchair, User, Sun, Thermometer, Volume2 } from 'lucide-react';
+import { subscribeToLatestTelemetry } from './firebase';
 
 const DEFAULT_THRESHOLDS = {
   distance: { min: 30, max: 60, unit: 'cm' },
@@ -21,6 +22,26 @@ export default function App() {
   });
 
   useEffect(() => {
+    // If Firebase Project ID is configured, subscribe to live Cloud Firestore updates
+    if (import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+      const unsubscribe = subscribeToLatestTelemetry(
+        (data) => {
+          setSensorValues({
+            seat: data.seat ?? true,
+            distance: Math.round(data.distance ?? 50),
+            light: Math.round(data.light ?? 430),
+            temp: Number(Number(data.temp ?? 24.7).toFixed(1)),
+            sound: Math.round(data.sound ?? 35)
+          });
+        },
+        () => {
+          // If offline or network issue, fallback gracefully
+        }
+      );
+      return () => unsubscribe();
+    }
+
+    // Fallback: Local simulated stream when no Firebase config is present
     const interval = setInterval(() => {
       setSensorValues(prev => ({
         ...prev,
