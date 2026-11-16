@@ -140,8 +140,11 @@ dist/
 *.bak
 
 # Firebase service account & secrets
-*firebase*.json
 firebase-credentials.json
 **/firebase-credentials.json
-serviceAccountKey.json
-**/serviceAccountKey.json
+serviceAccountKey*.json
+!firebase.json
+
+# SQLite database
+*.db
+outbox.db
