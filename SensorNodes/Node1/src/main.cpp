@@ -14,6 +14,9 @@
 
 namespace {
 constexpr uint8_t kSeatPin = 33;
+// Inverted logic: Pressed (Seated) = LOW, Released (Empty) = HIGH
+constexpr uint8_t kSeatOccupiedLevel = LOW;
+constexpr uint8_t kSeatVacantLevel = HIGH;
 constexpr uint32_t kDebounceMs = 40;
 constexpr UBaseType_t kQueueCapacity = 120;
 constexpr int64_t kVacantSleepUs = 60000000;
@@ -75,18 +78,18 @@ void sleepIfVacant(esp_mqtt_client_handle_t client) {
   xSemaphoreTake(stateMutex, portMAX_DELAY);
   const bool due = seat.ready && !seat.presence && !preparingSleep &&
       esp_timer_get_time() - seat.vacantSinceUs > kVacantSleepUs &&
-      digitalRead(kSeatPin) == LOW;
+      digitalRead(kSeatPin) == kSeatVacantLevel;
   if (due) preparingSleep = true;
   xSemaphoreGive(stateMutex);
   if (!due) return;
 
-  ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, 1));
+  ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, kSeatOccupiedLevel));
   if (client) ESP_ERROR_CHECK(esp_mqtt_client_stop(client));
   WiFi.mode(WIFI_OFF);
 
   xSemaphoreTake(stateMutex, portMAX_DELAY);
   // Someone may sit down during radio shutdown. Resume normal operation if so.
-  if (seat.presence || digitalRead(kSeatPin) == HIGH) {
+  if (seat.presence || digitalRead(kSeatPin) == kSeatOccupiedLevel) {
     preparingSleep = false;
     xSemaphoreGive(stateMutex);
     if (client) {
@@ -131,7 +134,7 @@ void vTaskSeatSample(void *) {
   for (;;) {
     xQueueReceive(edgeQueue, &edge, portMAX_DELAY);
     while (xQueueReceive(edgeQueue, &edge, pdMS_TO_TICKS(kDebounceMs)) == pdTRUE) {}
-    const bool occupied = digitalRead(kSeatPin) == HIGH;
+    const bool occupied = digitalRead(kSeatPin) == kSeatOccupiedLevel;
     xSemaphoreTake(stateMutex, portMAX_DELAY);
     const int64_t now = esp_timer_get_time();
     accountUntil(now);
@@ -141,7 +144,7 @@ void vTaskSeatSample(void *) {
       seat.ready = true;
       Serial.printf(">>> [Seat Event] State changed to: %s (Pin33=%s) <<<\n",
                     occupied ? "OCCUPIED (Seated)" : "EMPTY (Standing)",
-                    occupied ? "HIGH" : "LOW");
+                    (digitalRead(kSeatPin) == HIGH) ? "HIGH" : "LOW");
     }
     xSemaphoreGive(stateMutex);
     xSemaphoreGive(telemetryWake);
@@ -260,7 +263,7 @@ void setup() {
   Serial.println("==========================================");
   // ext0 leaves the pad in RTC mode; restore it before digitalRead/interrupts.
   ESP_ERROR_CHECK(rtc_gpio_deinit(GPIO_NUM_33));
-  pinMode(kSeatPin, INPUT); // External 10 kohm pull-down; active HIGH.
+  pinMode(kSeatPin, INPUT_PULLUP); // Active LOW: pressed connects to GND, released pulled HIGH.
   stateMutex = xSemaphoreCreateMutex();
   telemetryWake = xSemaphoreCreateBinary();
   edgeQueue = xQueueCreate(1, sizeof(TickType_t));
