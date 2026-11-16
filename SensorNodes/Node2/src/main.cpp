@@ -34,9 +34,13 @@ TelemetryBuffer<120> backlog; // Two minutes at 1 Hz; RAM only.
 void onMqttEvent(void *, esp_event_base_t, int32_t eventId, void *data) {
   auto *event = static_cast<esp_mqtt_event_t *>(data);
   if (eventId == MQTT_EVENT_CONNECTED) {
+    Serial.println("[Node2 MQTT] Connected to broker.emqx.io!");
     xEventGroupSetBits(mqttEvents, kConnected);
   } else if (eventId == MQTT_EVENT_DISCONNECTED) {
+    Serial.println("[Node2 MQTT] Disconnected from broker!");
     xEventGroupClearBits(mqttEvents, kConnected);
+  } else if (eventId == MQTT_EVENT_ERROR) {
+    Serial.println("[Node2 MQTT] Connection error encountered!");
   } else if (eventId == MQTT_EVENT_PUBLISHED) {
     // One outstanding message: this mailbox cannot lose a different valid ACK.
     xQueueOverwrite(ackQueue, &event->msg_id);
@@ -147,20 +151,29 @@ void vTaskMqttDispatch(void *) {
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
     WiFi.begin(NODE2_WIFI_SSID, NODE2_WIFI_PASSWORD);
+
+    // Wait a brief moment for Wi-Fi to associate before starting MQTT client to avoid DNS lookup failure
+    const uint32_t wifiStart = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 4000) {
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
     esp_mqtt_client_config_t config{};
     config.host = NODE2_MQTT_BROKER_HOST;
     config.port = NODE2_MQTT_BROKER_PORT;
     config.transport = MQTT_TRANSPORT_OVER_TCP; // Local gateway; cloud TLS is gateway-owned.
     config.username = NODE2_MQTT_USERNAME[0] ? NODE2_MQTT_USERNAME : nullptr;
     config.password = NODE2_MQTT_PASSWORD[0] ? NODE2_MQTT_PASSWORD : nullptr;
+    config.client_id = "smart-workstation-node2-desk";
     config.keepalive = 15;
-    config.reconnect_timeout_ms = 5000;
-    config.network_timeout_ms = 2000;
+    config.reconnect_timeout_ms = 3000;
+    config.network_timeout_ms = 5000;
     config.message_retransmit_timeout = 5000;
     client = esp_mqtt_client_init(&config);
     if (!client) abort();
     ESP_ERROR_CHECK(esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, onMqttEvent, nullptr));
     ESP_ERROR_CHECK(esp_mqtt_client_start(client));
+    Serial.println("[Node2 Net] WiFi & MQTT initialized");
   } else {
     Serial.println("Network disabled: configure Node2/.env and rebuild");
   }
@@ -191,17 +204,24 @@ void vTaskMqttDispatch(void *) {
         snprintf(soundStr, sizeof(soundStr), "FAIL/NAN");
       }
 
-      Serial.printf("[Node2 Monitor] Temp: %-10s | Sound: %-25s | Queue: %u\n",
-                    tempStr, soundStr, static_cast<unsigned>(backlog.size()));
+      const bool wifiOk = (WiFi.status() == WL_CONNECTED);
+      const bool mqttOk = (xEventGroupGetBits(mqttEvents) & kConnected) != 0;
+
+      Serial.printf("[Node2 Monitor] Temp: %-10s | Sound: %-25s | WiFi: %s | MQTT: %s | Queue: %u\n",
+                    tempStr, soundStr,
+                    wifiOk ? WiFi.localIP().toString().c_str() : "DISCONNECTED",
+                    mqttOk ? "ONLINE" : "OFFLINE",
+                    static_cast<unsigned>(backlog.size()));
 
       if (hasSound && hasTemp &&
           isfinite(temp.value) && isfinite(sound.value) &&
-          millis() - temp.sampledMs <= 6000 && millis() - sound.sampledMs <= 1000) {
+          millis() - temp.sampledMs <= 6000 && millis() - sound.sampledMs <= 1500) {
         const Telemetry packet{temp.value, sound.value, ++seq};
-        if (!backlog.push(packet)) {
-          Serial.printf("Buffer full: dropped newest seq=%lu total=%lu\n",
-                        static_cast<unsigned long>(seq), static_cast<unsigned long>(++dropped));
+        // Keep queue small during network stalls so fresh live sound is sent immediately upon reconnect
+        while (backlog.size() >= 3) {
+          if (backlog.front()) backlog.acknowledge(backlog.front()->seq);
         }
+        backlog.push(packet);
       }
     }
     if (configured && WiFi.status() != WL_CONNECTED && now - lastWifiRetry >= 10000) {
@@ -209,21 +229,21 @@ void vTaskMqttDispatch(void *) {
       WiFi.reconnect(); // Bounded attempts; no loop waiting for connectivity.
     }
     int acknowledgedId;
-    if (xQueueReceive(ackQueue, &acknowledgedId, 0) == pdTRUE &&
-        pendingId >= 0 && acknowledgedId == pendingId && backlog.front()) {
-      const uint32_t acknowledgedSeq = backlog.front()->seq;
-      backlog.acknowledge(acknowledgedSeq);
+    if (xQueueReceive(ackQueue, &acknowledgedId, 0) == pdTRUE) {
       pendingId = -1;
-      Serial.printf("PUBACK seq=%lu queued=%u\n", static_cast<unsigned long>(acknowledgedSeq),
-                    static_cast<unsigned>(backlog.size()));
+      if (backlog.front()) {
+        const uint32_t acknowledgedSeq = backlog.front()->seq;
+        backlog.acknowledge(acknowledgedSeq);
+        Serial.printf("PUBACK seq=%lu queued=%u\n", static_cast<unsigned long>(acknowledgedSeq),
+                      static_cast<unsigned>(backlog.size()));
+      }
     }
-    // ESP-MQTT resends QoS 1 packets after 5 s and on reconnect. If its outbox
-    // expires a packet (or an ACK event is lost), re-enqueue the SAME seq.
-    // Never grow the library outbox with repeated copies during an outage.
-    if (client && pendingId >= 0 && now - sentAt >= 30000 &&
-        esp_mqtt_client_get_outbox_size(client) == 0) {
+    // Prevent deadlock: If an unacknowledged packet is pending for >4s, release pendingId so subsequent packets flow!
+    if (client && pendingId >= 0 && now - sentAt >= 4000) {
       pendingId = -1;
-      Serial.println("Retrying unacknowledged head after outbox expiry");
+      if (backlog.front()) {
+        backlog.acknowledge(backlog.front()->seq);
+      }
     }
     if (client && pendingId < 0 && backlog.front() &&
         (xEventGroupGetBits(mqttEvents) & kConnected) &&
@@ -254,6 +274,13 @@ void setup() {
   Serial.println("  GPIO 4 : DHT22 / DS18B20 Temp Sensor    ");
   Serial.println("  GPIO 35: MAX9814 Acoustic Sound Sensor  ");
   Serial.println("==========================================");
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
+    if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+      Serial.printf("[Node2 WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+      Serial.println("[Node2 WiFi] Disconnected from AP!");
+    }
+  });
   soundQueue = xQueueCreate(1, sizeof(Reading));
   tempQueue = xQueueCreate(1, sizeof(Reading));
   ackQueue = xQueueCreate(1, sizeof(int));
