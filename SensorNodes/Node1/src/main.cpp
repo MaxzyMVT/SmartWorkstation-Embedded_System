@@ -57,9 +57,13 @@ constexpr char kTopic[] = "smart_workstation/node1";
 void onMqttEvent(void *, esp_event_base_t, int32_t eventId, void *data) {
   auto *event = static_cast<esp_mqtt_event_t *>(data);
   if (eventId == MQTT_EVENT_CONNECTED) {
+    Serial.println("[Node1 MQTT] Connected to broker.emqx.io!");
     xEventGroupSetBits(mqttEvents, kConnected);
   } else if (eventId == MQTT_EVENT_DISCONNECTED) {
+    Serial.println("[Node1 MQTT] Disconnected from broker!");
     xEventGroupClearBits(mqttEvents, kConnected);
+  } else if (eventId == MQTT_EVENT_ERROR) {
+    Serial.println("[Node1 MQTT] Connection error encountered!");
   } else if (eventId == MQTT_EVENT_PUBLISHED) {
     xQueueOverwrite(ackQueue, &event->msg_id);
   }
@@ -167,12 +171,16 @@ void vTaskSessionTimer(void *) {
 
       const float durationMin = static_cast<float>(seat.sittingUs / 60000000.0);
       const int pinDigital = digitalRead(kSeatPin);
+      const bool wifiOk = (WiFi.status() == WL_CONNECTED);
+      const bool mqttOk = (xEventGroupGetBits(mqttEvents) & kConnected) != 0;
 
-      Serial.printf("[Node1 Monitor] Presence: %-8s | Pin33: %-4s | Sitting: %.2f min | Seq: %lu\n",
+      Serial.printf("[Node1 Monitor] Presence: %-8s | Pin33: %-4s | Sitting: %.2f min | WiFi: %s | MQTT: %s | Queue: %u\n",
                     seat.presence ? "OCCUPIED" : "EMPTY",
                     pinDigital ? "HIGH" : "LOW",
                     durationMin,
-                    static_cast<unsigned long>(sequence));
+                    wifiOk ? WiFi.localIP().toString().c_str() : "DISCONNECTED",
+                    mqttOk ? "ONLINE" : "OFFLINE",
+                    static_cast<unsigned>(uxQueueMessagesWaiting(telemetryQueue)));
 
       previousPresence = seat.presence;
       reported = true;
@@ -198,14 +206,16 @@ void vTaskTelemetrySend(void *) {
     config.transport = MQTT_TRANSPORT_OVER_TCP; // Local gateway link; E5 cloud TLS is gateway-owned.
     config.username = NODE1_MQTT_USERNAME[0] ? NODE1_MQTT_USERNAME : nullptr;
     config.password = NODE1_MQTT_PASSWORD[0] ? NODE1_MQTT_PASSWORD : nullptr;
+    config.client_id = "smart-workstation-node1-chair";
     config.keepalive = 15;
-    config.reconnect_timeout_ms = 5000;
-    config.network_timeout_ms = 2000;
+    config.reconnect_timeout_ms = 3000;
+    config.network_timeout_ms = 5000;
     config.message_retransmit_timeout = 5000;
     client = esp_mqtt_client_init(&config);
     if (!client) abort();
     ESP_ERROR_CHECK(esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, onMqttEvent, nullptr));
     ESP_ERROR_CHECK(esp_mqtt_client_start(client));
+    Serial.println("[Node1 Net] WiFi & MQTT initialized");
   } else {
     Serial.println("Network disabled: configure Node1/.env and rebuild");
   }
@@ -282,6 +292,13 @@ void setup() {
                   static_cast<unsigned long>(sequence));
   }
   checkpoint.magic = 0; // A fresh checkpoint is only valid after orderly sleep.
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
+    if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+      Serial.printf("[Node1 WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+      Serial.println("[Node1 WiFi] Disconnected from AP!");
+    }
+  });
   attachInterruptArg(kSeatPin, onSeatEdge, nullptr, CHANGE);
   const TickType_t initial = xTaskGetTickCount();
   xQueueOverwrite(edgeQueue, &initial); // Debounce the boot/wake level too.
