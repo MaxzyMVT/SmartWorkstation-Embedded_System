@@ -21,7 +21,7 @@ constexpr uint8_t kSoundPin = 35; // ADC1 works while Wi-Fi runs.
 constexpr uint8_t kTempPin = 4;
 constexpr uint32_t kWindowUs = 50000;
 constexpr uint32_t kTempPeriodMs = 2500;
-struct Reading { float value; float raw; uint32_t sampledMs; };
+struct Reading { float value; float raw; uint16_t dcSample; uint32_t sampledMs; };
 QueueHandle_t soundQueue;
 QueueHandle_t tempQueue;
 QueueHandle_t ackQueue;
@@ -57,41 +57,47 @@ void vTaskSoundSample(void *) {
   analogReadResolution(12);
   analogSetPinAttenuation(kSoundPin, ADC_11db);
   float peakDb = 42.0f;  // Peak decibel hold with smooth decay
-  float peakAmp = 25.0f; // Peak amplitude hold with smooth decay
+  float peakAmp = 0.0f;  // Peak amplitude hold with smooth decay
+  uint16_t lastSample = 0;
 
   for (;;) {
     uint16_t low = 4095, high = 0;
     const uint32_t start = micros();
     do {
       const uint16_t sample = analogRead(kSoundPin);
+      lastSample = sample;
       if (sample < low) low = sample;
       if (sample > high) high = sample;
       delayMicroseconds(100);
     } while (static_cast<uint32_t>(micros() - start) < kWindowUs);
 
-    const float amplitude = high > low ? static_cast<float>(high - low) : 1.0f;
+    const float amplitude = high > low ? static_cast<float>(high - low) : 0.0f;
 
     // Logarithmic decibel estimation tuned for KY-037 dynamic range
-    const float effectiveAmp = (amplitude > kKy037NoiseFloor) ? amplitude : kKy037NoiseFloor;
-    float instDb = kKy037BaseDb + kKy037Scale * log10f(effectiveAmp / kKy037NoiseFloor);
-    if (instDb > 88.0f) instDb = 88.0f;
+    // When amplitude is 0 (constant DC line: GND or 3.3V), drops to 36.0 dB floor
+    float instDb = 36.0f;
+    if (amplitude > 0.0f) {
+      const float effectiveAmp = (amplitude > kKy037NoiseFloor) ? amplitude : kKy037NoiseFloor;
+      instDb = kKy037BaseDb + kKy037Scale * log10f(effectiveAmp / kKy037NoiseFloor);
+      if (instDb > 88.0f) instDb = 88.0f;
+    }
 
     // Peak Program Meter (PPM) ballistic response:
-    // 1. Instant attack: instantaneous sound spikes (claps/shouts) are NEVER dampened.
+    // 1. Instant attack: sound spikes (claps/shouts) register immediately without dampening.
     // 2. Controlled release: decay of 0.6 dB per 50 ms (~12 dB/s) so peaks stay visible.
     if (instDb >= peakDb) {
       peakDb = instDb;
     } else {
-      peakDb = (peakDb > 42.6f) ? (peakDb - 0.6f) : 42.0f;
+      peakDb = (peakDb > 36.6f) ? (peakDb - 0.6f) : 36.0f;
     }
 
     if (amplitude >= peakAmp) {
       peakAmp = amplitude;
     } else {
-      peakAmp = (peakAmp > 26.0f) ? (peakAmp * 0.92f) : 25.0f;
+      peakAmp = (peakAmp > 1.0f) ? (peakAmp * 0.90f) : 0.0f;
     }
 
-    Reading reading{peakDb, peakAmp, millis()};
+    Reading reading{peakDb, peakAmp, lastSample, millis()};
     xQueueOverwrite(soundQueue, &reading);
     vTaskDelay(1); // Let idle/watchdog run after every bounded window.
   }
@@ -120,7 +126,7 @@ void vTaskTempSample(void *) {
     const float value = sensor.readTemperature();
     const bool valid = isfinite(value) && value >= -40 && value <= 80;
 #endif
-    Reading reading{valid ? value : NAN, value, millis()};
+    Reading reading{valid ? value : NAN, value, 0, millis()};
     xQueueOverwrite(tempQueue, &reading);
     if (!valid) Serial.printf("[Temp Sensor] Read failed on GPIO 4 (got: %.2f) - check pin wiring or pull-up\n", value);
     vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(kTempPeriodMs));
@@ -172,14 +178,14 @@ void vTaskMqttDispatch(void *) {
         snprintf(tempStr, sizeof(tempStr), "FAIL/NAN");
       }
 
-      char soundStr[32];
+      char soundStr[40];
       if (hasSound && isfinite(sound.value)) {
-        snprintf(soundStr, sizeof(soundStr), "%.1f dB (p2p:%.0f)", sound.value, sound.raw);
+        snprintf(soundStr, sizeof(soundStr), "%.1f dB (raw:%-4u p2p:%.0f)", sound.value, sound.dcSample, sound.raw);
       } else {
         snprintf(soundStr, sizeof(soundStr), "FAIL/NAN");
       }
 
-      Serial.printf("[Node2 Monitor] Temp: %-10s | Sound: %-20s | Queue: %u\n",
+      Serial.printf("[Node2 Monitor] Temp: %-10s | Sound: %-25s | Queue: %u\n",
                     tempStr, soundStr, static_cast<unsigned>(backlog.size()));
 
       if (hasSound && hasTemp &&
