@@ -139,6 +139,10 @@ void vTaskSeatSample(void *) {
       seat.presence = occupied;
       seat.vacantSinceUs = occupied ? 0 : now;
       seat.ready = true;
+      Serial.printf(">>> [Seat Event] State changed to: %s (digital=%s, adc=%d) <<<\n",
+                    occupied ? "OCCUPIED (Seated)" : "EMPTY (Standing)",
+                    occupied ? "HIGH" : "LOW",
+                    analogRead(kSeatPin));
     }
     xSemaphoreGive(stateMutex);
     xSemaphoreGive(telemetryWake);
@@ -158,6 +162,18 @@ void vTaskSessionTimer(void *) {
       const Telemetry packet{seat.presence, seat.sittingUs, ++sequence};
       if (xQueueSend(telemetryQueue, &packet, 0) != pdTRUE)
         Serial.printf("Telemetry queue full: dropped seq=%lu\n", static_cast<unsigned long>(sequence));
+
+      const float durationMin = static_cast<float>(seat.sittingUs / 60000000.0);
+      const int rawAdc = analogRead(kSeatPin);
+      const int pinDigital = digitalRead(kSeatPin);
+
+      Serial.printf("[Node1 Monitor] Presence: %-8s | Pin33: %s (adc:%-4d) | Sitting: %.2f min | Seq: %lu\n",
+                    seat.presence ? "OCCUPIED" : "EMPTY",
+                    pinDigital ? "HIGH" : "LOW ",
+                    rawAdc,
+                    durationMin,
+                    static_cast<unsigned long>(sequence));
+
       previousPresence = seat.presence;
       reported = true;
       lastReport = now;
@@ -239,6 +255,12 @@ void vTaskTelemetrySend(void *) {
 
 void setup() {
   Serial.begin(115200);
+  delay(500);
+  Serial.println("\n==========================================");
+  Serial.println("  SmartWorkstation - Sensor Node 1 (Chair)");
+  Serial.println("  GPIO 33: FSR Seat Pressure Mat / Switch ");
+  Serial.println("  Power: ext0 deep sleep after 60s vacant ");
+  Serial.println("==========================================");
   // ext0 leaves the pad in RTC mode; restore it before digitalRead/interrupts.
   ESP_ERROR_CHECK(rtc_gpio_deinit(GPIO_NUM_33));
   pinMode(kSeatPin, INPUT); // External 10 kohm pull-down; active HIGH.
