@@ -45,18 +45,18 @@ void onMqttEvent(void *, esp_event_base_t, int32_t eventId, void *data) {
 
 // KY-037 Microphone Acoustic Calibration:
 // Electret capsule with low-gain pre-amp:
-// - Quiet room noise floor:  ~20 - 35 ADC counts  -> ~42 - 45 dB
-// - Normal speaking:          ~70 - 130 ADC counts -> ~54 - 60 dB
-// - Shouting / Loud talk:     ~160 - 300 ADC counts-> ~63 - 70 dB
-// - Clapping near microphone: ~350 - 800+ ADC counts-> ~72 - 82 dB
-constexpr float kKy037NoiseFloor = 25.0f;
-constexpr float kKy037BaseDb     = 42.0f;
-constexpr float kKy037Scale      = 25.0f;
+// - Quiet room / library floor: ~10 - 25 ADC counts  -> ~35 - 43 dB
+// - Normal speaking:            ~60 - 130 ADC counts -> ~52 - 59 dB
+// - Shouting / Loud talk:       ~150 - 300 ADC counts-> ~61 - 68 dB
+// - Clapping near microphone:   ~350 - 800+ ADC counts-> ~70 - 79 dB
+constexpr float kKy037NoiseFloor = 10.0f;
+constexpr float kKy037BaseDb     = 35.0f;
+constexpr float kKy037Scale      = 22.0f;
 
 void vTaskSoundSample(void *) {
   analogReadResolution(12);
   analogSetPinAttenuation(kSoundPin, ADC_11db);
-  float peakDb = 42.0f;  // Peak decibel hold with smooth decay
+  float peakDb = 38.0f;  // Peak decibel hold with smooth decay
   float peakAmp = 0.0f;  // Peak amplitude hold with smooth decay
   uint16_t lastSample = 0;
 
@@ -74,8 +74,8 @@ void vTaskSoundSample(void *) {
     const float amplitude = high > low ? static_cast<float>(high - low) : 0.0f;
 
     // Logarithmic decibel estimation tuned for KY-037 dynamic range
-    // When amplitude is 0 (constant DC line: GND or 3.3V), drops to 36.0 dB floor
-    float instDb = 36.0f;
+    // When amplitude is 0 (constant DC line), drops to 35.0 dB floor
+    float instDb = 35.0f;
     if (amplitude > 0.0f) {
       const float effectiveAmp = (amplitude > kKy037NoiseFloor) ? amplitude : kKy037NoiseFloor;
       instDb = kKy037BaseDb + kKy037Scale * log10f(effectiveAmp / kKy037NoiseFloor);
@@ -88,7 +88,7 @@ void vTaskSoundSample(void *) {
     if (instDb >= peakDb) {
       peakDb = instDb;
     } else {
-      peakDb = (peakDb > 36.6f) ? (peakDb - 0.6f) : 36.0f;
+      peakDb = (peakDb > 35.6f) ? (peakDb - 0.6f) : 35.0f;
     }
 
     if (amplitude >= peakAmp) {
