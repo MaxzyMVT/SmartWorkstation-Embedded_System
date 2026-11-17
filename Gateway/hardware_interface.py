@@ -92,9 +92,13 @@ class PinConfig:
     # SG90 Micro Servo (PWM)
     SERVO_PIN: int = 12        # Hardware PWM0 alternate on RPi
 
-    # I2C Configuration for BH1750
+    # Ambient Light Sensor Configuration
+    # Option A: Digital I2C BH1750 (GPIO 2 SDA / GPIO 3 SCL)
     I2C_BUS: int = 1
     BH1750_I2C_ADDR: int = 0x23  # 0x23 (ADDR grounded) or 0x5C (ADDR connected to VCC)
+
+    # Option B: KY-018 / LDR Module (BCM 27 -> Physical Pin 13)
+    LDR_PIN: int = int(os.getenv("LDR_PIN", "27"))
 
 
 class CurtainState:
@@ -273,13 +277,19 @@ class RPiHardware(BaseHardware):
         self._servo_pwm = GPIO.PWM(self.pins.SERVO_PIN, 50)
         self._servo_pwm.start(0)
 
-        # 6. BH1750 I2C
+        # 6. Light Sensor Setup: BH1750 I2C & KY-018 LDR GPIO
+        if self.pins.LDR_PIN >= 0:
+            GPIO.setup(self.pins.LDR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+        self._has_bh1750 = False
         try:
             self._i2c_bus = SMBus(self.pins.I2C_BUS)
             # Power on BH1750
             self._i2c_bus.write_byte(self.pins.BH1750_I2C_ADDR, 0x01)
-        except Exception as e:
-            logger.warning("Failed to initialize BH1750 on I2C bus %d: %s", self.pins.I2C_BUS, e)
+            self._has_bh1750 = True
+            logger.info("BH1750 digital light sensor initialized on I2C bus %d (0x%02X).", self.pins.I2C_BUS, self.pins.BH1750_I2C_ADDR)
+        except Exception:
+            logger.info("BH1750 I2C not detected; using KY-018 LDR (GPIO %d) or nominal ambient light.", self.pins.LDR_PIN)
 
     def read_distance_cm(self) -> float:
         # Collect 3 pings and use median to reject acoustic multipath spikes
@@ -319,15 +329,30 @@ class RPiHardware(BaseHardware):
             return (pulse_duration * 34300.0) / 2.0
 
     def read_lux(self) -> float:
-        raw_lux = 0.0
-        if self._i2c_bus is not None:
+        raw_lux: Optional[float] = None
+        if getattr(self, "_has_bh1750", False) and self._i2c_bus is not None:
             try:
                 with self._lock:
                     data = self._i2c_bus.read_i2c_block_data(self.pins.BH1750_I2C_ADDR, 0x10, 2)
                 raw_val = (data[0] << 8) | data[1]
                 raw_lux = raw_val / 1.2
             except Exception as e:
-                logger.warning("Error reading light sensor: %s", e)
+                now = time.time()
+                if not hasattr(self, "_last_lux_warn") or (now - self._last_lux_warn > 30.0):
+                    self._last_lux_warn = now
+                    logger.warning("BH1750 read error (%s); falling back to LDR GPIO.", e)
+
+        # Fallback to KY-018 / LDR module on GPIO pin if BH1750 unavailable
+        if raw_lux is None and self.pins.LDR_PIN >= 0:
+            try:
+                # Active LOW: 0 = Light sufficient (~480 Lux), 1 = Dark (<200 Lux)
+                is_dark = GPIO.input(self.pins.LDR_PIN) == GPIO.HIGH
+                raw_lux = 180.0 if is_dark else 480.0
+            except Exception:
+                raw_lux = 450.0
+
+        if raw_lux is None:
+            raw_lux = 450.0  # Nominal daytime study light fallback
 
         # 5-sample moving median filter to reject shadow spikes and noise
         with self._lock:
