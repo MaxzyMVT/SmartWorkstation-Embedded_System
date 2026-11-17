@@ -40,14 +40,18 @@ $RECYCLE.BIN/
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+**/.vscode/
 *.code-workspace
 
 # ==========================================
 # PlatformIO & Embedded Development
 # ==========================================
 .pio/
+**/.pio/
 .pioenvs/
+**/.pioenvs/
 .piolibdeps/
+**/.piolibdeps/
 .clangd/
 putty.log
 
@@ -147,8 +151,14 @@ serviceAccountKey*.json
 
 # SQLite database
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 outbox.db
+outbox.db*
 
 # Firebase CLI cache & deploy artifacts
 .firebase/
 firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
