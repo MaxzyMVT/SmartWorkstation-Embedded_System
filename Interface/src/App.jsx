@@ -9,7 +9,8 @@ import {
   CheckCircle2, 
   AlertTriangle, 
   Cpu, 
-  Activity
+  Activity,
+  Lock
 } from 'lucide-react';
 import { subscribeToWorkstationTelemetry } from './telemetryService';
 
@@ -35,6 +36,8 @@ export default function App() {
     curtain_state: 'OPEN',
     led_duty_cycle: 65.0,
     servo_angle: 85.0,
+    break_active: false,
+    break_remaining_s: 0,
     ai_state: {
       class_id: 0,
       class_name: 'OPTIMAL_STUDY',
@@ -61,6 +64,8 @@ export default function App() {
           curtain_state: data.curtain_state || prev.curtain_state,
           led_duty_cycle: data.led_duty_cycle !== undefined ? Number(data.led_duty_cycle) : prev.led_duty_cycle,
           servo_angle: data.servo_angle !== undefined ? Number(data.servo_angle) : prev.servo_angle,
+          break_active: data.break_active !== undefined ? Boolean(data.break_active) : prev.break_active,
+          break_remaining_s: data.break_remaining_s !== undefined ? Number(data.break_remaining_s) : prev.break_remaining_s,
           ai_state: data.ai_state || prev.ai_state,
           timestamp: data.timestamp || Date.now() / 1000,
           _source: data._source || prev._source
@@ -147,6 +152,30 @@ export default function App() {
           <span>Conf: <strong className="text-slate-700 font-semibold">{Math.round((telemetry.ai_state?.confidence || 0.95) * 100)}%</strong></span>
         </div>
       </header>
+
+      {/* Mandatory Study Break Countdown Banner */}
+      {telemetry.break_active && (
+        <div className="mb-6 bg-gradient-to-r from-amber-500 via-rose-500 to-red-500 text-white p-4 sm:p-5 rounded-2xl shadow-md flex items-center justify-between flex-wrap gap-3 animate-pulse border border-rose-300">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-white/20 rounded-xl backdrop-blur-sm">
+              <Lock className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-base sm:text-lg">Mandatory Study Break (Curtain Locked)</h3>
+                <span className="bg-white/20 text-white text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full">Enforced</span>
+              </div>
+              <p className="text-xs sm:text-sm text-white/90">50-minute study interval reached. Stand up, stretch, and rest your eyes.</p>
+            </div>
+          </div>
+          <div className="text-right ml-auto bg-black/15 px-4 py-2 rounded-xl backdrop-blur-sm">
+            <span className="block text-[10px] uppercase tracking-wider text-white/80 font-bold">Unlocks In</span>
+            <span className="text-2xl sm:text-3xl font-extrabold font-mono tracking-tight">
+              {Math.floor(telemetry.break_remaining_s / 60)}:{String(telemetry.break_remaining_s % 60).padStart(2, '0')}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* AI Ergonomic Closed-Loop Status Banner */}
       <section className={`rounded-2xl p-5 sm:p-6 border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm ${bannerBg}`}>

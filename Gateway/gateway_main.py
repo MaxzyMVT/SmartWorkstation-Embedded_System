@@ -543,6 +543,11 @@ class Gateway:
         self._seat_since: Optional[float] = None
         self._slow_infer = 0
 
+        self.break_duration_s = getattr(args, "break_duration", None) or float(os.getenv("BREAK_DURATION_S", "300"))
+        self._break_until: Optional[float] = None
+        self._break_active = False
+        self._break_remaining_s = 0
+
         self.mqtt_connected = threading.Event()
         self.mqtt = self._make_mqtt()
 
@@ -686,7 +691,40 @@ class Gateway:
                             ai["latency_ms"], AI_LATENCY_BUDGET_MS, self._slow_infer)
 
         changed = self._debounce(ai["class_id"])
-        self._actuate(self._active_class, snap["seat"])  # M2, closed loop
+        
+        # Check mandatory break lockout
+        if self._break_until is not None:
+            now_mono = time.monotonic()
+            if now_mono < self._break_until:
+                self._break_active = True
+                self._break_remaining_s = int(self._break_until - now_mono)
+                # Physical interlock: enforce curtain CLOSED and dim lamp during break
+                self.curtain.command("CLOSED")
+                self.led_duty = 15.0
+                self.hw.set_led_duty(self.led_duty)
+            else:
+                # Break completed: unlock workstation
+                self._break_active = False
+                self._break_remaining_s = 0
+                self._break_until = None
+                self._seat_since = time.monotonic()
+                self._active_class = 0
+                self.curtain.command("OPEN")
+                log.info("Break interval complete! Workstation unlocked.")
+                self.alerts.notify(0, "Break Complete", "Study break complete! Workstation unlocked. Happy studying!")
+        else:
+            self._break_active = False
+            self._break_remaining_s = 0
+            if self._active_class == 5:
+                # Trigger mandatory break lockout
+                self._break_until = time.monotonic() + self.break_duration_s
+                self._break_active = True
+                self._break_remaining_s = int(self.break_duration_s)
+                self.curtain.command("CLOSED")
+                log.info("Mandatory study break triggered! Locking curtain for %.0f seconds.", self.break_duration_s)
+            else:
+                self._actuate(self._active_class, snap["seat"])  # M2, closed loop
+
         if changed and self._active_class != 0:
             info = CLASS_INFO[self._active_class]
             self.alerts.notify(self._active_class, f"Smart Workstation: {info['name']}", info["advice"])
@@ -702,6 +740,8 @@ class Gateway:
             "curtain_state": self.curtain.state,
             "led_duty_cycle": round(self.led_duty, 1),
             "servo_angle": round(self.servo_angle, 1),
+            "break_active": self._break_active,
+            "break_remaining_s": self._break_remaining_s,
             "ai_state": ai,
             "node_status": snap["node_status"],  # extra key; dashboard may ignore it
             "timestamp": round(now, 2),
@@ -789,6 +829,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--interval", type=float, default=1.0, help="control loop period in seconds")
     p.add_argument("--duration", type=float, default=0.0, help="exit after N seconds (0 = run forever)")
     p.add_argument("--sim-nodes", action="store_true", help="force simulated Node 1/2 even if a broker is up")
+    p.add_argument("--break-duration", type=float,
+                   default=float(os.getenv("BREAK_DURATION_S", "300")),
+                   help="break countdown duration in seconds (default 300s = 5 min)")
     p.add_argument("--no-cloud", action="store_true", help="disable the outbox and Firestore forwarding")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
