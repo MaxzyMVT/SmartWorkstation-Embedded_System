@@ -77,8 +77,8 @@ class PinConfig:
     ULTRASONIC_TRIG: int = 23
     ULTRASONIC_ECHO: int = 24  # 5V echo line stepped down to 3.3V via 1k/2k divider
 
-    # Limit Switch / Emergency Button (KW11-3Z)
-    LIMIT_SWITCH: int = 17     # Internal pull-up enabled (active LOW when closed)
+    # Limit Switch / Emergency Button (KW11-3Z) - optional hardware (set to -1 if using software bounds)
+    LIMIT_SWITCH: int = int(os.getenv("LIMIT_SWITCH_PIN", "-1"))
 
     # 28BYJ-48 Stepper Motor via ULN2003
     STEPPER_IN1: int = 5
@@ -124,6 +124,10 @@ class BaseHardware(abc.ABC):
     def read_lux(self) -> float:
         """Reads ambient lighting intensity in Lux via BH1750 sensor."""
         ...
+
+    @abc.abstractmethod
+    def has_limit_switch(self) -> bool:
+        """Returns True if a physical limit switch is wired and configured."""
 
     @abc.abstractmethod
     def limit_switch_pressed(self) -> bool:
@@ -188,6 +192,9 @@ class MockHardware(BaseHardware):
             noise = random.uniform(-1.5, 1.5)
             return round(max(0.0, effective_base + boost + noise), 1)
 
+    def has_limit_switch(self) -> bool:
+        return False
+
     def limit_switch_pressed(self) -> bool:
         # Triggered at home (OPEN, position <= 0)
         return self._position <= 0
@@ -248,8 +255,9 @@ class RPiHardware(BaseHardware):
         GPIO.setup(self.pins.ULTRASONIC_TRIG, GPIO.OUT, initial=GPIO.LOW)
         GPIO.setup(self.pins.ULTRASONIC_ECHO, GPIO.IN)
 
-        # 2. Limit Switch (KW11-3Z) with pull-up resistor
-        GPIO.setup(self.pins.LIMIT_SWITCH, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        # 2. Limit Switch (optional; disabled when < 0, software bounds active)
+        if self.pins.LIMIT_SWITCH >= 0:
+            GPIO.setup(self.pins.LIMIT_SWITCH, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
         # 3. 28BYJ-48 Stepper Motor Pins
         for pin in (self.pins.STEPPER_IN1, self.pins.STEPPER_IN2, self.pins.STEPPER_IN3, self.pins.STEPPER_IN4):
@@ -330,7 +338,12 @@ class RPiHardware(BaseHardware):
             filtered = sorted_history[len(sorted_history) // 2]
             return round(filtered, 1)
 
+    def has_limit_switch(self) -> bool:
+        return self.pins.LIMIT_SWITCH >= 0
+
     def limit_switch_pressed(self) -> bool:
+        if not self.has_limit_switch():
+            return False
         # Pin pulled HIGH; switch connects to GND (active LOW)
         return GPIO.input(self.pins.LIMIT_SWITCH) == GPIO.LOW
 

@@ -94,6 +94,16 @@ CLASS_DEFINITIONS = {
         "action": "Curtain OPEN (0%); Turn off LED (0%); Standby power saving",
         "advice": "Workstation vacant. Power saving active.",
     },
+    7: {
+        "name": "NOISY_ENVIRONMENT",
+        "action": "Curtain CLOSED (100%); Acoustic barrier deployed",
+        "advice": "High ambient noise detected (>68 dB). Lowering curtain to reduce acoustic disruption.",
+    },
+    8: {
+        "name": "THERMAL_DISCOMFORT",
+        "action": "Curtain CLOSED (100%); Thermal draft shield deployed",
+        "advice": "Ambient temperature outside comfort standard (<20°C or >32°C). Adjust AC or take a rest.",
+    },
 }
 
 CLASS_INFO = CLASS_DEFINITIONS
@@ -235,6 +245,41 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     x_list.append(x_6)
     y_list.append(y_6)
 
+    # -------------------------------------------------------------------------
+    # Class 7: NOISY_ENVIRONMENT
+    # Sustained noise > 68 dB while seated (Thai/WHO acoustic disruption standard)
+    # -------------------------------------------------------------------------
+    presence_7 = np.ones(samples_per_class)
+    dist_7 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
+    lux_7 = rng.normal(loc=460.0, scale=60.0, size=samples_per_class).clip(320.0, 750.0)
+    temp_7 = rng.normal(loc=24.5, scale=1.2, size=samples_per_class).clip(21.5, 27.5)
+    sound_7 = rng.uniform(low=68.0, high=92.0, size=samples_per_class)
+    dur_7 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
+
+    x_7 = np.column_stack([presence_7, dist_7, lux_7, temp_7, sound_7, dur_7])
+    y_7 = np.full(samples_per_class, 7, dtype=int)
+    x_list.append(x_7)
+    y_list.append(y_7)
+
+    # -------------------------------------------------------------------------
+    # Class 8: THERMAL_DISCOMFORT
+    # Seated, Temp < 20°C (over-chilled AC) or > 32°C (heat stress) (DLPW/ASHRAE)
+    # -------------------------------------------------------------------------
+    presence_8 = np.ones(samples_per_class)
+    dist_8 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
+    lux_8 = rng.normal(loc=460.0, scale=60.0, size=samples_per_class).clip(320.0, 750.0)
+    half = samples_per_class // 2
+    temp_cold = rng.uniform(low=14.0, high=19.8, size=half)
+    temp_hot = rng.uniform(low=32.2, high=40.0, size=samples_per_class - half)
+    temp_8 = np.concatenate([temp_cold, temp_hot])
+    sound_8 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(25.0, 55.0)
+    dur_8 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
+
+    x_8 = np.column_stack([presence_8, dist_8, lux_8, temp_8, sound_8, dur_8])
+    y_8 = np.full(samples_per_class, 8, dtype=int)
+    x_list.append(x_8)
+    y_list.append(y_8)
+
     # Combine and shuffle
     x = np.vstack(x_list)
     y = np.concatenate(y_list)
@@ -253,7 +298,7 @@ def train_and_export_model(
     evaluates classification accuracy, benchmarks latency (<10ms requirement),
     and exports the serialized bundle to disk.
     """
-    logger.info("Generating synthetic sensor data (%d samples/class across 7 classes)...", samples_per_class)
+    logger.info("Generating synthetic sensor data (%d samples/class across %d classes)...", samples_per_class, len(CLASS_DEFINITIONS))
     x, y = generate_synthetic_workstation_data(samples_per_class=samples_per_class, random_state=random_state)
     logger.info("Dataset shape: X=%s, y=%s", x.shape, y.shape)
 
@@ -285,7 +330,7 @@ def train_and_export_model(
     report = classification_report(
         y_test,
         y_pred,
-        target_names=[CLASS_DEFINITIONS[i]["name"] for i in range(7)],
+        target_names=[CLASS_DEFINITIONS[i]["name"] for i in sorted(CLASS_DEFINITIONS.keys())],
         output_dict=True,
     )
     conf_matrix = confusion_matrix(y_test, y_pred)

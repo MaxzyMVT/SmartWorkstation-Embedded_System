@@ -111,21 +111,19 @@ The Gateway is the central brain running on a **Raspberry Pi 4 Model B** (or any
 ### 4.1 Raspberry Pi 4 GPIO Pinout (BCM Numbering)
 | Peripheral | Pin (BCM) | Physical Header Pin | Electrical Requirements |
 | :--- | :--- | :--- | :--- |
-| **BH1750 (I2C SDA)** | **GPIO 2** | Pin 3 | 3.3V, I2C Bus 1, Address `0x23` |
-| **BH1750 (I2C SCL)** | **GPIO 3** | Pin 5 | 3.3V, I2C Bus 1 |
+| **Light Sensor (KY-018 LDR / BH1750)** | **GPIO 2 / 3 (I2C) or ADC** | Pin 3, 5 | 3.3V power |
 | **HC-SR04 TRIG** | **GPIO 23** | Pin 16 | 3.3V Output pulse (10µs) |
 | **HC-SR04 ECHO** | **GPIO 24** | Pin 18 | **5V Input $\rightarrow$ 1kΩ / 2kΩ voltage divider to 3.3V** |
-| **KW11-3Z Limit Switch** | **GPIO 17** | Pin 11 | Active LOW, internal pull-up (`PUD_UP`) |
 | **28BYJ-48 Stepper IN1–IN4** | **GPIO 5, 6, 13, 19** | Pins 29, 31, 33, 35 | ULN2003 driver powered by 5V external rail |
-| **LED Bar MOSFET PWM** | **GPIO 18** | Pin 12 | Hardware PWM0 (1000 Hz) |
-| **SG90 Servo PWM** | **GPIO 12** | Pin 32 | 50 Hz PWM (Duty 2.5% to 12.5%) |
+| **LED Lamp MOSFET PWM** | **GPIO 18** | Pin 12 | Hardware PWM0 (1000 Hz) dynamic brightness |
+| *(Optional Limit Switch)* | *(GPIO 17)* | *(Pin 11)* | *Optional; M7 safety stop satisfied via software bounds* |
 
 ### 4.2 Software Stack & Architecture
 - **Language**: Python 3.9+
 - **Key Modules**:
   - `gateway_main.py`: Central daemon. Ingests MQTT node packets, reads local hardware, executes AI loop, drives actuators, dispatches alerts.
   - `hardware_interface.py`: Hardware Abstraction Layer (HAL). Automatically activates **Mock Hardware Mode** on Windows/macOS/Linux when RPi GPIO is unavailable.
-  - `train_ai_model.py`: Trains and serializes `model.joblib` (`RandomForestClassifier`, 6 inputs, 7 output states).
+  - `train_ai_model.py`: Trains and serializes `model.joblib` (`RandomForestClassifier`, 6 inputs, 9 output states including acoustic and thermal comfort).
 
 ### 4.3 Environment Configuration (`Gateway/.env`)
 Copy `Gateway/.env.example` to `Gateway/.env`:
@@ -200,12 +198,13 @@ The Gateway publishes consolidated JSON every 1 second to:
 
 ## 6. Critical Course Rubric Rules for All Agents
 
-1. **Buttons & switches are NOT sensors (M1)**: Do not count the limit switch or seat switch as an environment sensor. Our 5 true sensors are: Ultrasonic, BH1750 Lux, FSR Pressure, DHT22 Temperature, MAX9814 Sound.
-2. **LEDs & buzzers are NOT actuators (M2)**: The actuators are the 28BYJ-48 stepper motor and SG90 servo motor.
-3. **If-Else rules are NOT AI (M4)**: Actuator triggering must be mediated by the trained model in `model.joblib`.
-4. **E7 vs Raspberry Pi**: FAQ #4 clarifies that E7 (On-Device AI) only earns rubric points on an MCU (ESP32-S3). Because Gateway is a Raspberry Pi, we earn our 10 depth points via **E1 + E2 + E3 + E4 + E5**.
-5. **No committed credentials (E5 / M8)**: Never commit real Wi-Fi passwords, private keys, or webhook URLs. Keep `.env` git-ignored.
-6. **Git Conventional Commits**: Always format commits as `type(scope): message` (e.g., `feat(node1): implement FreeRTOS seat task with deep sleep`).
+1. **Buttons & switches are NOT sensors (M1)**: Do not count the limit switch or seat switch as an environment sensor. Our 5 true sensors are: Ultrasonic (HC-SR04), Light (KY-018 LDR / BH1750), Pressure (FSR402), Temperature (KY-001 DS18B20), Sound (KY-037 Mic).
+2. **LEDs & buzzers are NOT actuators (M2)**: The mechanical actuator is the 28BYJ-48 stepper motor (smart curtain). Supplementary dynamic task lighting is controlled via MOSFET PWM.
+3. **Safety Stop for Actuators (M7)**: Moving parts must have a way to stop safely. Satisfied by software travel limits (0 to 4096 steps = 0% to 100%), stepper watchdog timeout, ULN2003 coil de-energizing on idle, and emergency stop command.
+4. **If-Else rules are NOT AI (M4)**: Actuator triggering must be mediated by the trained 9-class model in `model.joblib`.
+5. **E7 vs Raspberry Pi**: FAQ #4 clarifies that E7 (On-Device AI) only earns rubric points on an MCU (ESP32-S3). Because Gateway is a Raspberry Pi, we earn our 10 depth points via **E1 + E2 + E3 + E4 + E5**.
+6. **No committed credentials (E5 / M8)**: Never commit real Wi-Fi passwords, private keys, or webhook URLs. Keep `.env` git-ignored.
+7. **Git Conventional Commits**: Always format commits as `type(scope): message` (e.g., `feat(node1): implement FreeRTOS seat task with deep sleep`).
 
 ---
 

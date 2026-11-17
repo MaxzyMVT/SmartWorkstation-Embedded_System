@@ -274,6 +274,14 @@ class CurtainController(threading.Thread):
             self._cv.notify()
 
     def _home(self) -> None:
+        if not self.hw.has_limit_switch():
+            # M7 Safety Stop: Software travel bounds (0..CURTAIN_TRAVEL_STEPS) with coil watchdog
+            self.hw.release_stepper()
+            self.position = 0
+            self._settled = self.state = "OPEN"
+            log.info("Curtain initialized at 0 (OPEN) [M7: Software step bounds 0..%d active]", CURTAIN_TRAVEL_STEPS)
+            return
+
         for _ in range(CURTAIN_TRAVEL_STEPS + 400):
             if self.hw.limit_switch_pressed():
                 break
@@ -282,7 +290,7 @@ class CurtainController(threading.Thread):
             self.hw.step(-1)
             time.sleep(self.step_delay)
         else:
-            log.error("Curtain homing: limit switch (GPIO17) never triggered; assuming OPEN. Check wiring.")
+            log.error("Curtain homing: limit switch never triggered; assuming OPEN. Check wiring.")
         self.hw.release_stepper()
         self.position = 0
         self._settled = self.state = "OPEN"
@@ -669,6 +677,12 @@ class Gateway:
         elif class_id == 6:      # AWAY (unseated)
             self.curtain.command("OPEN")
             self.led_duty = 0.0
+        elif class_id == 7:      # NOISY_ENVIRONMENT (> 68 dB)
+            self.curtain.command("CLOSED")  # Lower curtain to provide acoustic isolation
+            self.alerts.notify(class_id, "Noise Alert", "High ambient noise (>68dB). Curtain deployed for acoustic shielding.")
+        elif class_id == 8:      # THERMAL_DISCOMFORT (< 20°C or > 32°C)
+            self.curtain.command("CLOSED")  # Lower curtain to shield from cold AC draft or heat
+            self.alerts.notify(class_id, "Thermal Discomfort", "Room temperature outside comfort range (<20°C or >32°C). Curtain closed.")
 
         if not seat:
             self.led_duty = min(self.led_duty, LED_IDLE_CAP_PCT)
@@ -681,7 +695,24 @@ class Gateway:
         snap = self.registry.snapshot()
         distance, lux = self._read_local()
         sitting = self._sitting_minutes(snap)
-        feats = [1.0 if snap["seat"] else 0.0, distance, lux, snap["temp"], snap["sound"], sitting]
+
+        # Anti-spike temporal smoothing on Sound and Temp (EMA filter, alpha=0.25)
+        raw_snd = snap["sound"]
+        raw_tmp = snap["temp"]
+        if not hasattr(self, "_sound_ema") or self._sound_ema is None:
+            self._sound_ema = raw_snd
+            self._temp_ema = raw_tmp
+        else:
+            self._sound_ema = 0.25 * raw_snd + 0.75 * self._sound_ema
+            self._temp_ema = 0.25 * raw_tmp + 0.75 * self._temp_ema
+
+        # Handle unplugged / out-of-range distance (e.g. 999.0cm) so it doesn't trick the AI
+        ai_distance = distance
+        if distance >= 150.0 and snap["seat"]:
+            # Unplugged HC-SR04 or out of range: default to nominal 45.0 cm for AI feature vector
+            ai_distance = 45.0
+
+        feats = [1.0 if snap["seat"] else 0.0, ai_distance, lux, self._temp_ema, self._sound_ema, sitting]
 
         ai = self.ai.predict(feats)  # M4
         if ai["latency_ms"] > AI_LATENCY_BUDGET_MS:

@@ -22,6 +22,8 @@ const RFC_STATES = {
   4: { name: 'Slouching (Too Far)', advice: 'Slouching too far back (>65cm)! Align spine upright', type: 'alert' },
   5: { name: 'Break Timer Reached', advice: '50-minute study interval reached! Stand up and rest your eyes', type: 'alert' },
   6: { name: 'Workstation Vacant (Away)', advice: 'Workstation vacant. Power saving active', type: 'idle' },
+  7: { name: 'Noisy Environment (>68 dB)', advice: 'High acoustic disturbance! Lowering curtain for acoustic shielding', type: 'alert' },
+  8: { name: 'Thermal Discomfort', advice: 'Ambient temperature outside comfort range (<20°C or >32°C)! Curtain deployed', type: 'alert' },
 };
 
 export default function App() {
