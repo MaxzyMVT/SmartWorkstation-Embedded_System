@@ -50,25 +50,45 @@ This component serves as the central intelligent edge controller for the Smart W
 
 ## 3. Installation & Setup
 
-### Option A: On Raspberry Pi 4
+### Option A: On Raspberry Pi 4 (Automated Setup)
 
+Run the automated provisioning script to install system packages, configure Mosquitto broker, enable I2C/SPI, create Python `.venv`, and install dependencies in one command:
+
+```bash
+cd SmartWorkstation-Embedded_System/Gateway
+chmod +x setup_rpi.sh
+bash setup_rpi.sh
+```
+
+#### Manual Step-by-Step (Alternative)
 1. Enable I2C interface on Raspberry Pi OS:
    ```bash
-   sudo raspi-config
-   # Navigate to: Interface Options -> I2C -> Enable -> Finish
+   sudo raspi-config nonint do_i2c 0
+   sudo raspi-config nonint do_spi 0
    ```
-2. Install system packages:
+2. Install system packages & Mosquitto broker:
    ```bash
    sudo apt update
-   sudo apt install -y python3-pip python3-dev i2c-tools mosquitto mosquitto-clients
+   sudo apt install -y python3-pip python3-venv python3-dev libgpiod-dev i2c-tools mosquitto mosquitto-clients
    ```
-3. Verify I2C device detection:
+3. Configure Mosquitto listener & anonymous access:
+   ```bash
+   sudo mkdir -p /etc/mosquitto/conf.d
+   sudo bash -c 'cat > /etc/mosquitto/conf.d/workstation.conf <<EOF
+listener 1883
+allow_anonymous true
+EOF'
+   sudo systemctl restart mosquitto
+   ```
+4. Verify I2C device detection:
    ```bash
    i2cdetect -y 1
    # You should see address 23 (BH1750)
    ```
-4. Install Python dependencies:
+5. Install Python dependencies:
    ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
