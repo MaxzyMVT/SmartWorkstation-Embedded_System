@@ -243,6 +243,12 @@ class SmartWorkstationAI:
 # Actuators (M2): stepper curtain on its own thread so the 1 Hz loop never blocks
 # ----------------------------------------------------------------------------
 class CurtainController(threading.Thread):
+    TARGET_STEPS = {
+        "OPEN": 0,
+        "GLARE_SHIELD": int(CURTAIN_TRAVEL_STEPS * 0.40),
+        "CLOSED": CURTAIN_TRAVEL_STEPS,
+    }
+
     def __init__(self, hw: BaseHardware, step_delay: float) -> None:
         super().__init__(daemon=True, name="curtain")
         self.hw = hw
@@ -255,6 +261,8 @@ class CurtainController(threading.Thread):
         self._halt = threading.Event()
 
     def command(self, target: str) -> None:
+        if target not in self.TARGET_STEPS:
+            target = "OPEN"
         with self._cv:
             if target != self._target:
                 self._target = target
@@ -289,26 +297,26 @@ class CurtainController(threading.Thread):
                 target = self._target
             if self._halt.is_set():
                 break
-            if target == "CLOSED":
+
+            target_step = self.TARGET_STEPS.get(target, 0)
+            if self.position < target_step:
                 self.state = "CLOSING"
-                while self.position < CURTAIN_TRAVEL_STEPS and self._target == "CLOSED" and not self._halt.is_set():
+                while self.position < target_step and self._target == target and not self._halt.is_set():
                     self.hw.step(+1)
                     self.position += 1
                     time.sleep(self.step_delay)
-                if self._target == "CLOSED":
-                    self._settled = self.state = "CLOSED"
-            else:
+            elif self.position > target_step:
                 self.state = "OPENING"
-                while self.position > 0 and self._target == "OPEN" and not self._halt.is_set():
-                    if self.hw.limit_switch_pressed():
+                while self.position > target_step and self._target == target and not self._halt.is_set():
+                    if target_step == 0 and self.hw.limit_switch_pressed():
                         self.position = 0
                         break
                     self.hw.step(-1)
                     self.position -= 1
                     time.sleep(self.step_delay)
-                if self._target == "OPEN":
-                    self.position = 0 if self.hw.limit_switch_pressed() else self.position
-                    self._settled = self.state = "OPEN"
+
+            if self._target == target:
+                self._settled = self.state = target
             self.hw.release_stepper()  # de-energise coils: no heat, no hum
 
 
@@ -629,19 +637,34 @@ class Gateway:
     def _actuate(self, class_id: int, seat: bool) -> None:
         """Class -> actuator mapping. The class itself comes from the trained model."""
         servo = SERVO_REST_DEG
-        if class_id == 1:      # TOO_DARK
+        if class_id == 0:        # OPTIMAL_STUDY
             self.curtain.command("OPEN")
-            self.led_duty = min(100.0, self.led_duty + LED_STEP_PCT)
-        elif class_id == 2:    # TOO_BRIGHT_GLARE
-            self.curtain.command("CLOSED")
-            self.led_duty = max(0.0, self.led_duty - LED_STEP_PCT)
-        elif class_id == 4:    # TOO_HOT
-            self.curtain.command("CLOSED")
-        elif class_id == 5:    # POOR_POSTURE
+            # Closed-loop: gently regulate LED towards 450 Lux
+            curr_lux = self._last_lux if self._last_lux is not None else 450.0
+            if curr_lux < 380.0:
+                self.led_duty = min(100.0, self.led_duty + LED_STEP_PCT)
+            elif curr_lux > 520.0:
+                self.led_duty = max(0.0, self.led_duty - LED_STEP_PCT)
+        elif class_id == 1:      # LOW_LIGHT (< 300 Lux)
+            self.curtain.command("OPEN")
+            self.led_duty = min(100.0, self.led_duty + LED_STEP_PCT * 2)
+        elif class_id == 2:      # HARSH_GLARE (> 750 Lux)
+            self.curtain.command("GLARE_SHIELD")  # Lower curtain 40% to shield overhead glare
+            self.led_duty = max(0.0, self.led_duty - LED_STEP_PCT * 2)
+        elif class_id == 3:      # TEXT_NECK_TOO_CLOSE (< 28 cm)
             servo = SERVO_NUDGE_DEG
-        elif class_id == 6:    # NEEDS_BREAK
+            self.alerts.notify(class_id, "Posture Alert", "Head too close (<28cm)! Straighten your neck and sit back.")
+        elif class_id == 4:      # SLOUCH_TOO_FAR (> 65 cm)
+            servo = SERVO_NUDGE_DEG
+            self.alerts.notify(class_id, "Posture Alert", "Slouching too far back! Align your spine upright.")
+        elif class_id == 5:      # BREAK_TIMER_REACHED (>= 50 min)
+            self.curtain.command("CLOSED")  # Complete physical barrier for break
             servo = SERVO_BREAK_DEG
-        # classes 0 and 3 hold the current curtain/LED state
+            self.alerts.notify(class_id, "Break Required", "50-minute study interval reached. Take a 5-minute break!")
+        elif class_id == 6:      # AWAY (unseated)
+            self.curtain.command("OPEN")
+            self.led_duty = 0.0
+
         if not seat:
             self.led_duty = min(self.led_duty, LED_IDLE_CAP_PCT)
         self.hw.set_led_duty(self.led_duty)

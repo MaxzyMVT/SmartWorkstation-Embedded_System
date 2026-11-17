@@ -17,13 +17,13 @@ Feature Vector (6 Features):
     5: sitting_duration_min (Continuous sitting duration, minutes)
 
 Classes:
-    0: OPTIMAL_STUDY        - Posture and environment are ergonomic
-    1: TEXT_NECK_TOO_CLOSE  - Distance < 28cm (Head too close to book)
-    2: SLOUCH_TOO_FAR       - Distance > 65cm while seated (Leaning back excessively)
-    3: POOR_LIGHTING        - Lux < 200 Lux (Too dim) or > 1200 Lux (Harsh glare)
-    4: NOISY_OR_HOT_FATIGUE - Sound > 60 dB or Temp > 30°C (Environmental fatigue)
-    5: BREAK_TIMER_REACHED  - Duration >= 50 min (Prolonged sedentary study)
-    6: AWAY                 - Presence == 0 (User left desk)
+    0: OPTIMAL_STUDY        - Posture (35-55cm) and lighting (350-700 Lux) are ergonomic
+    1: LOW_LIGHT            - Lux < 300 Lux (Workspace too dim; boost LED to 100%)
+    2: HARSH_GLARE          - Lux > 750 Lux (Excess ambient glare; lower curtain shield to 40%, turn off LED)
+    3: TEXT_NECK_TOO_CLOSE  - Distance < 28cm (Head too close to book/screen; posture warning)
+    4: SLOUCH_TOO_FAR       - Distance > 65cm while seated (Slouching excessively backward)
+    5: BREAK_TIMER_REACHED  - Duration >= 50 min (Prolonged study; close curtain 100% for break)
+    6: AWAY                 - Presence == 0 (User left desk; curtain open, LED 0% standby)
 """
 
 from __future__ import annotations
@@ -61,37 +61,37 @@ FEATURE_NAMES = [
 CLASS_DEFINITIONS = {
     0: {
         "name": "OPTIMAL_STUDY",
-        "action": "Curtain OPEN; Closed-loop LED tuned to ~450 Lux; Normal operation",
+        "action": "Curtain OPEN (0%); Closed-loop LED ~450 Lux; Normal ergonomics",
         "advice": "Posture and study environment are optimal. Keep it up!",
     },
     1: {
-        "name": "TEXT_NECK_TOO_CLOSE",
-        "action": "Trigger Curtain CLOSE (drops blocker); Posture warning alert",
-        "advice": "Head too close (<28cm)! Straighten your neck and sit back.",
+        "name": "LOW_LIGHT",
+        "action": "Curtain OPEN (0%); Boost LED PWM to 100% to illuminate workspace",
+        "advice": "Workspace too dark (<300 Lux). Boosting desk lighting to 100%.",
     },
     2: {
-        "name": "SLOUCH_TOO_FAR",
-        "action": "Trigger Curtain CLOSE; Posture warning alert",
-        "advice": "Slouching too far back (>65cm)! Align your spine upright.",
+        "name": "HARSH_GLARE",
+        "action": "Curtain GLARE_SHIELD (40%); Turn OFF LED (0%) to eliminate glare",
+        "advice": "Harsh ambient glare (>750 Lux). Lowering curtain glare shield to 40%.",
     },
     3: {
-        "name": "POOR_LIGHTING",
-        "action": "Boost LED PWM to 100%; Alert if lux still <200 or glare >1200",
-        "advice": "Unsuitable lighting! Adjust room light or desk lamp to avoid eye strain.",
+        "name": "TEXT_NECK_TOO_CLOSE",
+        "action": "Trigger posture warning alert; Prompt user to straighten neck",
+        "advice": "Head too close (<28cm)! Straighten your neck and sit back.",
     },
     4: {
-        "name": "NOISY_OR_HOT_FATIGUE",
-        "action": "Maintain curtain open; Advise user to ventilate or relocate",
-        "advice": "High room noise (>60dB) or heat (>30°C) causing mental fatigue.",
+        "name": "SLOUCH_TOO_FAR",
+        "action": "Trigger posture warning alert; Prompt user to sit upright",
+        "advice": "Slouching too far back (>65cm)! Align your spine upright.",
     },
     5: {
         "name": "BREAK_TIMER_REACHED",
-        "action": "Trigger Curtain CLOSE for 5-min break; Study timer elapsed",
+        "action": "Curtain FULLY CLOSED (100%); Physical break interlock",
         "advice": "50-minute study interval reached! Stand up, stretch, and rest your eyes.",
     },
     6: {
         "name": "AWAY",
-        "action": "Turn off LED Bar (0%); Park curtain OPEN; Sleep mode",
+        "action": "Curtain OPEN (0%); Turn off LED (0%); Standby power saving",
         "advice": "Workstation vacant. Power saving active.",
     },
 }
@@ -140,15 +140,15 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     y_list.append(y_0)
 
     # -------------------------------------------------------------------------
-    # Class 1: TEXT_NECK_TOO_CLOSE
-    # Distance < 28cm (Head hunched forward toward book)
+    # Class 1: LOW_LIGHT
+    # Workspace illumination < 300 Lux (Too dim for ergonomic study)
     # -------------------------------------------------------------------------
     presence_1 = np.ones(samples_per_class)
-    dist_1 = rng.uniform(low=10.0, high=26.5, size=samples_per_class)
-    lux_1 = rng.normal(loc=430.0, scale=70.0, size=samples_per_class).clip(250.0, 800.0)
-    temp_1 = rng.normal(loc=24.5, scale=1.5, size=samples_per_class).clip(21.0, 28.0)
-    sound_1 = rng.normal(loc=37.0, scale=5.0, size=samples_per_class).clip(28.0, 52.0)
-    dur_1 = rng.uniform(low=1.0, high=48.0, size=samples_per_class)
+    dist_1 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
+    lux_1 = rng.uniform(low=20.0, high=290.0, size=samples_per_class)
+    temp_1 = rng.normal(loc=24.5, scale=1.2, size=samples_per_class).clip(21.5, 27.5)
+    sound_1 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(25.0, 48.0)
+    dur_1 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
 
     x_1 = np.column_stack([presence_1, dist_1, lux_1, temp_1, sound_1, dur_1])
     y_1 = np.ones(samples_per_class, dtype=int)
@@ -156,15 +156,15 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     y_list.append(y_1)
 
     # -------------------------------------------------------------------------
-    # Class 2: SLOUCH_TOO_FAR
-    # Distance > 65cm (Slouching excessively backward)
+    # Class 2: HARSH_GLARE
+    # Ambient illumination > 750 Lux (Harsh overhead glare / window reflection)
     # -------------------------------------------------------------------------
     presence_2 = np.ones(samples_per_class)
-    dist_2 = rng.uniform(low=66.5, high=110.0, size=samples_per_class)
-    lux_2 = rng.normal(loc=440.0, scale=80.0, size=samples_per_class).clip(280.0, 850.0)
-    temp_2 = rng.normal(loc=24.8, scale=1.4, size=samples_per_class).clip(21.0, 28.5)
-    sound_2 = rng.normal(loc=38.0, scale=5.0, size=samples_per_class).clip(28.0, 54.0)
-    dur_2 = rng.uniform(low=1.0, high=48.0, size=samples_per_class)
+    dist_2 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
+    lux_2 = rng.uniform(low=760.0, high=2200.0, size=samples_per_class)
+    temp_2 = rng.normal(loc=24.5, scale=1.2, size=samples_per_class).clip(21.5, 27.5)
+    sound_2 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(25.0, 48.0)
+    dur_2 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
 
     x_2 = np.column_stack([presence_2, dist_2, lux_2, temp_2, sound_2, dur_2])
     y_2 = np.full(samples_per_class, 2, dtype=int)
@@ -172,20 +172,15 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     y_list.append(y_2)
 
     # -------------------------------------------------------------------------
-    # Class 3: POOR_LIGHTING
-    # Lux < 200 Lux (Dim/dark) or > 1200 Lux (Harsh direct glare)
+    # Class 3: TEXT_NECK_TOO_CLOSE
+    # Distance < 28cm (Head hunched forward toward book / screen)
     # -------------------------------------------------------------------------
     presence_3 = np.ones(samples_per_class)
-    dist_3 = rng.normal(loc=46.0, scale=5.0, size=samples_per_class).clip(32.0, 60.0)
-    # Half dim, half glare
-    half = samples_per_class // 2
-    lux_dim = rng.uniform(low=20.0, high=185.0, size=half)
-    lux_glare = rng.uniform(low=1250.0, high=2500.0, size=samples_per_class - half)
-    lux_3 = np.concatenate([lux_dim, lux_glare])
-    rng.shuffle(lux_3)
-    temp_3 = rng.normal(loc=24.5, scale=1.3, size=samples_per_class).clip(21.5, 28.0)
-    sound_3 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(26.0, 50.0)
-    dur_3 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
+    dist_3 = rng.uniform(low=10.0, high=27.5, size=samples_per_class)
+    lux_3 = rng.normal(loc=450.0, scale=60.0, size=samples_per_class).clip(320.0, 720.0)
+    temp_3 = rng.normal(loc=24.5, scale=1.5, size=samples_per_class).clip(21.0, 28.0)
+    sound_3 = rng.normal(loc=37.0, scale=5.0, size=samples_per_class).clip(28.0, 52.0)
+    dur_3 = rng.uniform(low=1.0, high=48.0, size=samples_per_class)
 
     x_3 = np.column_stack([presence_3, dist_3, lux_3, temp_3, sound_3, dur_3])
     y_3 = np.full(samples_per_class, 3, dtype=int)
@@ -193,31 +188,15 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     y_list.append(y_3)
 
     # -------------------------------------------------------------------------
-    # Class 4: NOISY_OR_HOT_FATIGUE
-    # Sound > 60 dB or Temp > 30°C
+    # Class 4: SLOUCH_TOO_FAR
+    # Distance > 65cm (Slouching excessively backward)
     # -------------------------------------------------------------------------
     presence_4 = np.ones(samples_per_class)
-    dist_4 = rng.normal(loc=46.0, scale=5.0, size=samples_per_class).clip(32.0, 60.0)
-    lux_4 = rng.normal(loc=450.0, scale=70.0, size=samples_per_class).clip(300.0, 750.0)
-
-    # Split into high sound, high temp, or both
-    third = samples_per_class // 3
-    # Subgroup A: High sound (>62 dB)
-    sound_4a = rng.uniform(low=62.0, high=85.0, size=third)
-    temp_4a = rng.normal(loc=25.0, scale=1.5, size=third).clip(22.0, 28.5)
-
-    # Subgroup B: High temperature (>30.5°C)
-    sound_4b = rng.normal(loc=38.0, scale=5.0, size=third).clip(28.0, 52.0)
-    temp_4b = rng.uniform(low=30.5, high=38.0, size=third)
-
-    # Subgroup C: Both noisy & hot
-    rest = samples_per_class - (2 * third)
-    sound_4c = rng.uniform(low=62.0, high=85.0, size=rest)
-    temp_4c = rng.uniform(low=30.5, high=38.0, size=rest)
-
-    sound_4 = np.concatenate([sound_4a, sound_4b, sound_4c])
-    temp_4 = np.concatenate([temp_4a, temp_4b, temp_4c])
-    dur_4 = rng.uniform(low=1.0, high=45.0, size=samples_per_class)
+    dist_4 = rng.uniform(low=66.0, high=110.0, size=samples_per_class)
+    lux_4 = rng.normal(loc=450.0, scale=60.0, size=samples_per_class).clip(320.0, 720.0)
+    temp_4 = rng.normal(loc=24.8, scale=1.4, size=samples_per_class).clip(21.0, 28.5)
+    sound_4 = rng.normal(loc=38.0, scale=5.0, size=samples_per_class).clip(28.0, 54.0)
+    dur_4 = rng.uniform(low=1.0, high=48.0, size=samples_per_class)
 
     x_4 = np.column_stack([presence_4, dist_4, lux_4, temp_4, sound_4, dur_4])
     y_4 = np.full(samples_per_class, 4, dtype=int)
@@ -434,8 +413,8 @@ if __name__ == "__main__":
         {"name": "Ergonomic study", "features": (1, 45.0, 450.0, 24.5, 35.0, 20.0)},
         {"name": "Text neck (slouching forward)", "features": (1, 20.0, 450.0, 24.5, 35.0, 20.0)},
         {"name": "Slouching too far back", "features": (1, 80.0, 450.0, 24.5, 35.0, 20.0)},
-        {"name": "Dark room", "features": (1, 45.0, 80.0, 24.5, 35.0, 20.0)},
-        {"name": "Noisy/Hot room", "features": (1, 45.0, 450.0, 32.0, 68.0, 20.0)},
+        {"name": "Dark room (<300 Lux)", "features": (1, 45.0, 80.0, 24.5, 35.0, 20.0)},
+        {"name": "Harsh glare room (>750 Lux)", "features": (1, 45.0, 1100.0, 24.5, 35.0, 20.0)},
         {"name": "Break timer elapsed (55 min)", "features": (1, 45.0, 450.0, 24.5, 35.0, 55.0)},
         {"name": "User away", "features": (0, 150.0, 300.0, 25.0, 35.0, 0.0)},
     ]

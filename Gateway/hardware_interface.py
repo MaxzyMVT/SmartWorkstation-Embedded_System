@@ -99,6 +99,7 @@ class PinConfig:
 
 class CurtainState:
     OPEN = "OPEN"
+    GLARE_SHIELD = "GLARE_SHIELD"
     CLOSED = "CLOSED"
     OPENING = "OPENING"
     CLOSING = "CLOSING"
@@ -176,10 +177,16 @@ class MockHardware(BaseHardware):
 
     def read_lux(self) -> float:
         with self._lock:
-            # Ambient light responds in closed-loop to LED PWM duty
+            # Physical closed-loop: curtain shields overhead ambient light
+            # Position 0 (OPEN) -> 100% ambient light reaches desk
+            # Position 819 (GLARE_SHIELD 40%) -> 55% reaches desk (cuts overhead glare)
+            # Position 2048 (CLOSED 100%) -> 15% reaches desk
+            curtain_frac = max(0.0, min(1.0, self._position / float(CURTAIN_TRAVEL_STEPS)))
+            shield_factor = max(0.15, 1.0 - (curtain_frac * 0.85))
+            effective_base = self._base_lux * shield_factor
             boost = (self._led_duty / 100.0) * 350.0
-            noise = random.uniform(-2.0, 2.0)
-            return round(max(0.0, self._base_lux + boost + noise), 1)
+            noise = random.uniform(-1.5, 1.5)
+            return round(max(0.0, effective_base + boost + noise), 1)
 
     def limit_switch_pressed(self) -> bool:
         # Triggered at home (OPEN, position <= 0)
@@ -224,6 +231,7 @@ class RPiHardware(BaseHardware):
         self._led_pwm = None
         self._servo_pwm = None
         self._i2c_bus = None
+        self._lux_history: List[float] = []
 
         self._init_gpio()
         logger.info("Physical RPiHardware initialized successfully.")
@@ -303,16 +311,24 @@ class RPiHardware(BaseHardware):
             return (pulse_duration * 34300.0) / 2.0
 
     def read_lux(self) -> float:
-        if self._i2c_bus is None:
-            return 0.0
-        try:
-            with self._lock:
-                data = self._i2c_bus.read_i2c_block_data(self.pins.BH1750_I2C_ADDR, 0x10, 2)
-            raw_val = (data[0] << 8) | data[1]
-            return round(raw_val / 1.2, 1)
-        except Exception as e:
-            logger.warning("Error reading BH1750: %s", e)
-            return 0.0
+        raw_lux = 0.0
+        if self._i2c_bus is not None:
+            try:
+                with self._lock:
+                    data = self._i2c_bus.read_i2c_block_data(self.pins.BH1750_I2C_ADDR, 0x10, 2)
+                raw_val = (data[0] << 8) | data[1]
+                raw_lux = raw_val / 1.2
+            except Exception as e:
+                logger.warning("Error reading light sensor: %s", e)
+
+        # 5-sample moving median filter to reject shadow spikes and noise
+        with self._lock:
+            self._lux_history.append(raw_lux)
+            if len(self._lux_history) > 5:
+                self._lux_history.pop(0)
+            sorted_history = sorted(self._lux_history)
+            filtered = sorted_history[len(sorted_history) // 2]
+            return round(filtered, 1)
 
     def limit_switch_pressed(self) -> bool:
         # Pin pulled HIGH; switch connects to GND (active LOW)

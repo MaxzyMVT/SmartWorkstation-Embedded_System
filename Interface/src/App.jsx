@@ -15,10 +15,10 @@ import { subscribeToWorkstationTelemetry } from './telemetryService';
 
 const RFC_STATES = {
   0: { name: 'Optimal Study', advice: 'Posture and study environment are optimal', type: 'optimal' },
-  1: { name: 'Text Neck (Too Close)', advice: 'Head too close (<28cm)! Straighten neck and sit back', type: 'alert' },
-  2: { name: 'Slouching (Too Far)', advice: 'Slouching too far back (>65cm)! Align spine upright', type: 'alert' },
-  3: { name: 'Poor Lighting', advice: 'Unsuitable lighting! Adjusting LED lamp and curtain', type: 'alert' },
-  4: { name: 'Noisy / Hot Fatigue', advice: 'High noise (>60dB) or heat (>30°C) causing fatigue', type: 'alert' },
+  1: { name: 'Low Light (<300 Lux)', advice: 'Workspace too dim! Boosting LED lamp to 100%', type: 'alert' },
+  2: { name: 'Harsh Glare (>750 Lux)', advice: 'Harsh overhead glare! Lowering curtain glare shield to 40%', type: 'alert' },
+  3: { name: 'Text Neck (Too Close)', advice: 'Head too close (<28cm)! Straighten neck and sit back', type: 'alert' },
+  4: { name: 'Slouching (Too Far)', advice: 'Slouching too far back (>65cm)! Align spine upright', type: 'alert' },
   5: { name: 'Break Timer Reached', advice: '50-minute study interval reached! Stand up and rest your eyes', type: 'alert' },
   6: { name: 'Workstation Vacant (Away)', advice: 'Workstation vacant. Power saving active', type: 'idle' },
 };
@@ -160,7 +160,7 @@ export default function App() {
                 {currentRfc.name}
               </h2>
               <span className={`text-[11px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${badgeStyle}`}>
-                {telemetry.curtain_state === 'CLOSED' ? 'Curtain Closed' : 'Curtain Open'}
+                {telemetry.curtain_state === 'CLOSED' ? 'Curtain Closed (100%)' : telemetry.curtain_state === 'GLARE_SHIELD' ? 'Glare Shield (40%)' : 'Curtain Open (0%)'}
               </span>
             </div>
             <p className="text-xs sm:text-sm text-slate-600 mt-0.5">{adviceText}</p>
