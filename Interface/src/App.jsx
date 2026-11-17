@@ -207,11 +207,6 @@ export default function App() {
             <span className="block text-[10px] uppercase font-bold text-slate-400">Desk Lamp</span>
             <span className="font-bold text-slate-800">{telemetry.led_duty_cycle.toFixed(1)}%</span>
           </div>
-          <div className="h-6 w-[1px] bg-slate-200"></div>
-          <div className="text-center px-2">
-            <span className="block text-[10px] uppercase font-bold text-slate-400">Nudge Servo</span>
-            <span className="font-bold text-slate-800">{telemetry.servo_angle.toFixed(1)}°</span>
-          </div>
         </div>
       </section>
 
@@ -279,7 +274,7 @@ export default function App() {
               {telemetry.seat ? 'SEATED' : 'EMPTY'}
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              FSR Mat Pin 33
+              FSR402 Mat (Node 1 Pin 33)
             </span>
           </div>
 
@@ -310,7 +305,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">cm</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              HC-SR04 Ultrasonic
+              HC-SR04 (RPi GPIO 23/24)
             </span>
           </div>
 
@@ -351,7 +346,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">Lux</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              BH1750 I2C
+              KY-018 LDR Module
             </span>
           </div>
 
@@ -392,7 +387,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">°C</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              Node 2 GPIO 4
+              KY-001 DS18B20 (Node 2 GPIO 4)
             </span>
           </div>
 
@@ -433,7 +428,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">dB</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              Node 2 KY-037 Mic
+              KY-037 Mic (Node 2 GPIO 35)
             </span>
           </div>
 
