@@ -130,7 +130,7 @@ The Gateway is the central brain running on a **Raspberry Pi 4 Model B** (or any
 ### 4.3 Environment Configuration (`Gateway/.env`)
 Copy `Gateway/.env.example` to `Gateway/.env`:
 ```ini
-MQTT_BROKER_HOST=localhost
+MQTT_BROKER_HOST=broker.emqx.io
 MQTT_BROKER_PORT=1883
 MOCK_HARDWARE=false
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
@@ -145,10 +145,12 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # Run in Mock Simulation Mode (laptop development):
-python gateway_main.py --mock --broker localhost
+python gateway_main.py --mock --broker broker.emqx.io
 
 # Run on actual Raspberry Pi hardware:
-python gateway_main.py --broker localhost
+python gateway_main.py --broker broker.emqx.io
+# Or run with local offline Mosquitto broker:
+# python gateway_main.py --broker localhost
 
 # Train / retrain AI model if features or weights change:
 python train_ai_model.py

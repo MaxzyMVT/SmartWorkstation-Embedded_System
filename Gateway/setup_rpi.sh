@@ -90,6 +90,6 @@ fi
 echo "=========================================================="
 echo "  Setup Complete! You can now start the Gateway:"
 echo "    source .venv/bin/activate"
-echo "    python gateway_main.py --mock --broker localhost"
-echo "  (Or without --mock once physical GPIO sensors are wired)"
+echo "    python gateway_main.py --broker broker.emqx.io"
+echo "  (Use --mock if testing without physical GPIO / I2C sensors)"
 echo "=========================================================="
