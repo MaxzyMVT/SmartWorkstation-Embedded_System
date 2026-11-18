@@ -1,36 +1,37 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <mqtt_client.h>
-#include <freertos/event_groups.h>
-#include "TelemetryBuffer.h"
-#include "node2_config.h"
-#include <cmath>
 #include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
-
-#ifdef NODE2_USE_DS18B20
-#include <DallasTemperature.h>
-#include <OneWire.h>
-#else
-#include <DHT.h>
-#endif
+#include <cmath>
+#include "TelemetryBuffer.h"
+#include "node2_config.h"
 
 namespace {
-constexpr uint8_t kSoundPin = 35; // ADC1 works while Wi-Fi runs.
-constexpr uint8_t kTempPin = 4;
-constexpr uint32_t kWindowUs = 50000;
-constexpr uint32_t kTempPeriodMs = 2500;
-struct Reading { float value; float raw; uint16_t dcSample; uint32_t sampledMs; };
+// Pin Configuration: Both pins are on ADC1 to allow uninterrupted analog reads during Wi-Fi operation
+constexpr uint8_t kSoundPin = 35; // KY-037 Sound Sensor Analog OUT (ADC1 Channel 7)
+constexpr uint8_t kLdrPin   = 34; // KY-018 LDR Photoresistor Signal (ADC1 Channel 6)
+
+constexpr uint32_t kWindowUs = 50000; // 50ms sound sample window
+
+struct Reading {
+  float value;
+  float raw;
+  uint16_t dcSample;
+  uint32_t sampledMs;
+};
+
 QueueHandle_t soundQueue;
-QueueHandle_t tempQueue;
+QueueHandle_t ldrQueue;
 QueueHandle_t ackQueue;
 EventGroupHandle_t mqttEvents;
+
 constexpr EventBits_t kConnected = BIT0;
 constexpr char kTopic[] = "smart_workstation/node2";
-TelemetryBuffer<120> backlog; // Two minutes at 1 Hz; RAM only.
+TelemetryBuffer<120> backlog; // RAM store-and-forward buffer
 
-// MQTT callbacks run in the library task. Only pass state through RTOS objects.
 void onMqttEvent(void *, esp_event_base_t, int32_t eventId, void *data) {
   auto *event = static_cast<esp_mqtt_event_t *>(data);
   if (eventId == MQTT_EVENT_CONNECTED) {
@@ -42,17 +43,13 @@ void onMqttEvent(void *, esp_event_base_t, int32_t eventId, void *data) {
   } else if (eventId == MQTT_EVENT_ERROR) {
     Serial.println("[Node2 MQTT] Connection error encountered!");
   } else if (eventId == MQTT_EVENT_PUBLISHED) {
-    // One outstanding message: this mailbox cannot lose a different valid ACK.
     xQueueOverwrite(ackQueue, &event->msg_id);
   }
 }
 
-// KY-037 Microphone Acoustic Calibration:
-// Electret capsule with low-gain pre-amp:
-// - Quiet room / library floor: ~10 - 25 ADC counts  -> ~35 - 43 dB
-// - Normal speaking:            ~60 - 130 ADC counts -> ~52 - 59 dB
-// - Shouting / Loud talk:       ~150 - 300 ADC counts-> ~61 - 68 dB
-// - Clapping near microphone:   ~350 - 800+ ADC counts-> ~70 - 79 dB
+// ----------------------------------------------------------------------------
+// KY-037 Microphone Calibration
+// ----------------------------------------------------------------------------
 constexpr float kKy037NoiseFloor = 10.0f;
 constexpr float kKy037BaseDb     = 35.0f;
 constexpr float kKy037Scale      = 22.0f;
@@ -60,8 +57,8 @@ constexpr float kKy037Scale      = 22.0f;
 void vTaskSoundSample(void *) {
   analogReadResolution(12);
   analogSetPinAttenuation(kSoundPin, ADC_11db);
-  float peakDb = 38.0f;  // Peak decibel hold with smooth decay
-  float peakAmp = 0.0f;  // Peak amplitude hold with smooth decay
+  float peakDb = 38.0f;
+  float peakAmp = 0.0f;
   uint32_t peakHoldUntil = 0;
   uint32_t ampHoldUntil = 0;
   uint16_t lastSample = 0;
@@ -79,8 +76,6 @@ void vTaskSoundSample(void *) {
 
     const float amplitude = high > low ? static_cast<float>(high - low) : 0.0f;
 
-    // Logarithmic decibel estimation tuned for KY-037 dynamic range
-    // When amplitude is 0 (constant DC line), drops to 35.0 dB floor
     float instDb = 35.0f;
     if (amplitude > 0.0f) {
       const float effectiveAmp = (amplitude > kKy037NoiseFloor) ? amplitude : kKy037NoiseFloor;
@@ -88,10 +83,6 @@ void vTaskSoundSample(void *) {
       if (instDb > 88.0f) instDb = 88.0f;
     }
 
-    // Peak Program Meter (PPM) ballistic response with 1.5-second peak hold:
-    // 1. Instant attack: sound spikes (claps/shouts) register immediately without dampening.
-    // 2. Peak Hold (1500 ms): holds highest peak so 1-second telemetry capture never misses transients.
-    // 3. Controlled release: smooth decay of 0.5 dB per 50 ms (~10 dB/s) after hold expires.
     const uint32_t nowMs = millis();
     if (instDb >= peakDb) {
       peakDb = instDb;
@@ -109,40 +100,62 @@ void vTaskSoundSample(void *) {
 
     Reading reading{peakDb, peakAmp, lastSample, millis()};
     xQueueOverwrite(soundQueue, &reading);
-    vTaskDelay(1); // Let idle/watchdog run after every bounded window.
+    vTaskDelay(1);
   }
 }
 
-void vTaskTempSample(void *) {
-#ifdef NODE2_USE_DS18B20
-  OneWire wire(kTempPin);
-  DallasTemperature sensor(&wire);
-  sensor.begin();
-  sensor.setResolution(12);
-  sensor.setWaitForConversion(false);
-#else
-  DHT sensor(kTempPin, DHT22);
-  sensor.begin();
-#endif
-  vTaskDelay(pdMS_TO_TICKS(2000)); // Power-on settling.
+// ----------------------------------------------------------------------------
+// KY-018 LDR Calibration (Continuous 12-bit Analog Lux Reading)
+// ----------------------------------------------------------------------------
+float adcToLux(uint16_t adc) {
+  if (adc < 30) adc = 30;
+  if (adc > 4090) adc = 4090;
+
+  // Calibrated response curve:
+  // - Covered by hand (ADC ~100-400):  50 - 200 Lux (LOW_LIGHT < 300)
+  // - Room light      (ADC ~1500-2400): 400 - 600 Lux (OPTIMAL_STUDY 350-700)
+  // - Flashlight/Glare(ADC >3200):      800 - 1800+ Lux (HARSH_GLARE > 750)
+  const float norm = static_cast<float>(adc) / 4095.0f;
+  const float lux = 45.0f + 380.0f * powf(norm, 1.25f) + 1400.0f * powf(norm, 3.2f);
+  return roundf(lux * 10.0f) / 10.0f;
+}
+
+void vTaskLdrSample(void *) {
+  analogReadResolution(12);
+  analogSetPinAttenuation(kLdrPin, ADC_11db);
+
+  constexpr int kFilterSize = 8;
+  uint16_t buffer[kFilterSize] = {0};
+  int idx = 0;
+  bool filled = false;
+
+  vTaskDelay(pdMS_TO_TICKS(200));
   TickType_t lastWake = xTaskGetTickCount();
+
   for (;;) {
-#ifdef NODE2_USE_DS18B20
-    sensor.requestTemperatures();
-    vTaskDelay(pdMS_TO_TICKS(750));
-    const float value = sensor.getTempCByIndex(0);
-    const bool valid = isfinite(value) && value >= -55 && value <= 125;
-#else
-    const float value = sensor.readTemperature();
-    const bool valid = isfinite(value) && value >= -40 && value <= 80;
-#endif
-    Reading reading{valid ? value : NAN, value, 0, millis()};
-    xQueueOverwrite(tempQueue, &reading);
-    if (!valid) Serial.printf("[Temp Sensor] Read failed on GPIO 4 (got: %.2f) - check pin wiring or pull-up\n", value);
-    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(kTempPeriodMs));
+    const uint16_t raw = analogRead(kLdrPin);
+    buffer[idx] = raw;
+    idx = (idx + 1) % kFilterSize;
+    if (idx == 0) filled = true;
+
+    const int count = filled ? kFilterSize : idx;
+    uint32_t sum = 0;
+    for (int i = 0; i < count; ++i) {
+      sum += buffer[i];
+    }
+    const uint16_t avgAdc = sum / count;
+    const float lux = adcToLux(avgAdc);
+
+    Reading reading{lux, static_cast<float>(raw), avgAdc, millis()};
+    xQueueOverwrite(ldrQueue, &reading);
+
+    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(100)); // Sample at 10 Hz
   }
 }
 
+// ----------------------------------------------------------------------------
+// MQTT Telemetry Dispatch Task (E1 Priority 2, E4 Reliable Comm)
+// ----------------------------------------------------------------------------
 void vTaskMqttDispatch(void *) {
   esp_mqtt_client_handle_t client = nullptr;
   const bool configured = NODE2_WIFI_SSID[0] && NODE2_MQTT_BROKER_HOST[0];
@@ -152,7 +165,6 @@ void vTaskMqttDispatch(void *) {
     WiFi.setAutoReconnect(true);
     WiFi.begin(NODE2_WIFI_SSID, NODE2_WIFI_PASSWORD);
 
-    // Wait a brief moment for Wi-Fi to associate before starting MQTT client to avoid DNS lookup failure
     const uint32_t wifiStart = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 4000) {
       vTaskDelay(pdMS_TO_TICKS(100));
@@ -161,7 +173,7 @@ void vTaskMqttDispatch(void *) {
     esp_mqtt_client_config_t config{};
     config.host = NODE2_MQTT_BROKER_HOST;
     config.port = NODE2_MQTT_BROKER_PORT;
-    config.transport = MQTT_TRANSPORT_OVER_TCP; // Local gateway; cloud TLS is gateway-owned.
+    config.transport = MQTT_TRANSPORT_OVER_TCP;
     config.username = NODE2_MQTT_USERNAME[0] ? NODE2_MQTT_USERNAME : nullptr;
     config.password = NODE2_MQTT_PASSWORD[0] ? NODE2_MQTT_PASSWORD : nullptr;
     config.client_id = "smart-workstation-node2-desk";
@@ -177,57 +189,60 @@ void vTaskMqttDispatch(void *) {
   } else {
     Serial.println("Network disabled: configure Node2/.env and rebuild");
   }
-  uint32_t seq = 0, dropped = 0;
+
+  uint32_t seq = 0;
   uint32_t lastSample = millis(), lastWifiRetry = millis(), sentAt = 0;
   uint32_t lastEnqueueAttempt = millis() - 1000;
   int pendingId = -1;
   TickType_t lastWake = xTaskGetTickCount();
+
   for (;;) {
     const uint32_t now = millis();
     if (now - lastSample >= 1000) {
       lastSample += 1000;
-      Reading sound{}, temp{};
+      Reading sound{}, ldr{};
       const bool hasSound = (xQueuePeek(soundQueue, &sound, 0) == pdTRUE);
-      const bool hasTemp = (xQueuePeek(tempQueue, &temp, 0) == pdTRUE);
+      const bool hasLdr   = (xQueuePeek(ldrQueue, &ldr, 0) == pdTRUE);
 
-      char tempStr[20];
-      if (hasTemp && isfinite(temp.value)) {
-        snprintf(tempStr, sizeof(tempStr), "%.1f C", temp.value);
+      char ldrStr[35];
+      if (hasLdr && isfinite(ldr.value)) {
+        snprintf(ldrStr, sizeof(ldrStr), "%.1f Lux (adc:%u)", ldr.value, ldr.dcSample);
       } else {
-        snprintf(tempStr, sizeof(tempStr), "FAIL/NAN");
+        snprintf(ldrStr, sizeof(ldrStr), "WAITING");
       }
 
-      char soundStr[40];
+      char soundStr[35];
       if (hasSound && isfinite(sound.value)) {
-        snprintf(soundStr, sizeof(soundStr), "%.1f dB (raw:%-4u p2p:%.0f)", sound.value, sound.dcSample, sound.raw);
+        snprintf(soundStr, sizeof(soundStr), "%.1f dB (p2p:%.0f)", sound.value, sound.raw);
       } else {
-        snprintf(soundStr, sizeof(soundStr), "FAIL/NAN");
+        snprintf(soundStr, sizeof(soundStr), "WAITING");
       }
 
       const bool wifiOk = (WiFi.status() == WL_CONNECTED);
       const bool mqttOk = (xEventGroupGetBits(mqttEvents) & kConnected) != 0;
 
-      Serial.printf("[Node2 Monitor] Temp: %-10s | Sound: %-25s | WiFi: %s | MQTT: %s | Queue: %u\n",
-                    tempStr, soundStr,
+      Serial.printf("[Node2 Monitor] Lux: %-22s | Sound: %-20s | WiFi: %s | MQTT: %s | Queue: %u\n",
+                    ldrStr, soundStr,
                     wifiOk ? WiFi.localIP().toString().c_str() : "DISCONNECTED",
                     mqttOk ? "ONLINE" : "OFFLINE",
                     static_cast<unsigned>(backlog.size()));
 
-      if (hasSound && hasTemp &&
-          isfinite(temp.value) && isfinite(sound.value) &&
-          millis() - temp.sampledMs <= 6000 && millis() - sound.sampledMs <= 1500) {
-        const Telemetry packet{temp.value, sound.value, ++seq};
-        // Keep queue small during network stalls so fresh live sound is sent immediately upon reconnect
+      if (hasSound && hasLdr &&
+          isfinite(ldr.value) && isfinite(sound.value) &&
+          millis() - ldr.sampledMs <= 3000 && millis() - sound.sampledMs <= 1500) {
+        const Telemetry packet{sound.value, ldr.value, ++seq};
         while (backlog.size() >= 3) {
           if (backlog.front()) backlog.acknowledge(backlog.front()->seq);
         }
         backlog.push(packet);
       }
     }
+
     if (configured && WiFi.status() != WL_CONNECTED && now - lastWifiRetry >= 10000) {
       lastWifiRetry = now;
-      WiFi.reconnect(); // Bounded attempts; no loop waiting for connectivity.
+      WiFi.reconnect();
     }
+
     int acknowledgedId;
     if (xQueueReceive(ackQueue, &acknowledgedId, 0) == pdTRUE) {
       pendingId = -1;
@@ -238,13 +253,14 @@ void vTaskMqttDispatch(void *) {
                       static_cast<unsigned>(backlog.size()));
       }
     }
-    // Prevent deadlock: If an unacknowledged packet is pending for >4s, release pendingId so subsequent packets flow!
+
     if (client && pendingId >= 0 && now - sentAt >= 4000) {
       pendingId = -1;
       if (backlog.front()) {
         backlog.acknowledge(backlog.front()->seq);
       }
     }
+
     if (client && pendingId < 0 && backlog.front() &&
         (xEventGroupGetBits(mqttEvents) & kConnected) &&
         now - lastEnqueueAttempt >= 100) {
@@ -252,10 +268,9 @@ void vTaskMqttDispatch(void *) {
       const auto &packet = *backlog.front();
       char payload[160];
       const int length = snprintf(payload, sizeof(payload),
-          "{\"node_id\":\"node2\",\"temp_c\":%.2f,\"sound_db\":%.2f,\"seq\":%lu}",
-          packet.tempC, packet.soundDb, static_cast<unsigned long>(packet.seq));
+          "{\"node_id\":\"node2\",\"lux\":%.1f,\"sound_db\":%.2f,\"seq\":%lu}",
+          packet.lux, packet.soundDb, static_cast<unsigned long>(packet.seq));
       if (length > 0 && static_cast<size_t>(length) < sizeof(payload)) {
-        // Queue network work in the library task so sampling continues offline.
         pendingId = esp_mqtt_client_enqueue(client, kTopic, payload, length, 1, 0, true);
         if (pendingId >= 0) sentAt = now;
         else Serial.println("MQTT enqueue failed; retaining head for retry");
@@ -271,9 +286,10 @@ void setup() {
   delay(500);
   Serial.println("\n==========================================");
   Serial.println("  SmartWorkstation - Sensor Node 2 (Desk) ");
-  Serial.println("  GPIO 4 : KY-001 DS18B20 Temp Sensor     ");
-  Serial.println("  GPIO 35: KY-037 Sound Detection Sensor  ");
+  Serial.println("  GPIO 34: KY-018 LDR Photoresistor (ADC1)");
+  Serial.println("  GPIO 35: KY-037 Sound Sensor (ADC1)     ");
   Serial.println("==========================================");
+
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
     if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
       Serial.printf("[Node2 WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
@@ -281,16 +297,21 @@ void setup() {
       Serial.println("[Node2 WiFi] Disconnected from AP!");
     }
   });
+
   soundQueue = xQueueCreate(1, sizeof(Reading));
-  tempQueue = xQueueCreate(1, sizeof(Reading));
-  ackQueue = xQueueCreate(1, sizeof(int));
+  ldrQueue   = xQueueCreate(1, sizeof(Reading));
+  ackQueue   = xQueueCreate(1, sizeof(int));
   mqttEvents = xEventGroupCreate();
-  if (!soundQueue || !tempQueue || !ackQueue || !mqttEvents) abort();
-  // Highest application priority for sound, lowest for slow temperature reads.
-  // Sound runs away from networking and temperature to reduce sampling jitter.
+
+  if (!soundQueue || !ldrQueue || !ackQueue || !mqttEvents) abort();
+
+  // E1 Multitasking: 3 distinct FreeRTOS tasks with reasoned priorities
+  // Task 1: Sound sampling (Priority 3, core 1 - high frequency 50ms window)
+  // Task 2: LDR lux sampling (Priority 1, core 0 - 100ms sample period)
+  // Task 3: MQTT dispatch (Priority 2, core 0 - 1s telemetry publishing)
   if (xTaskCreatePinnedToCore(vTaskSoundSample, "sound", 4096, nullptr, 3, nullptr, 1) != pdPASS ||
-      xTaskCreatePinnedToCore(vTaskTempSample, "temperature", 4096, nullptr, 1, nullptr, 0) != pdPASS ||
-      xTaskCreatePinnedToCore(vTaskMqttDispatch, "mqtt", 6144, nullptr, 2, nullptr, 0) != pdPASS) abort();
+      xTaskCreatePinnedToCore(vTaskLdrSample,   "ldr",   4096, nullptr, 1, nullptr, 0) != pdPASS ||
+      xTaskCreatePinnedToCore(vTaskMqttDispatch,"mqtt",  6144, nullptr, 2, nullptr, 0) != pdPASS) abort();
 }
 
 void loop() { vTaskDelete(nullptr); }

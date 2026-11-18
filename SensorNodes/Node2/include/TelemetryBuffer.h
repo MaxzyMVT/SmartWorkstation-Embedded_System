@@ -3,8 +3,8 @@
 #include <stdint.h>
 
 struct Telemetry {
-  float tempC;
   float soundDb;
+  float lux;
   uint32_t seq;
 };
 
