@@ -348,7 +348,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">Lux</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              KY-018 LDR Photoresistor (RPi GPIO 27)
+              KY-018 LDR Photoresistor (Node 2 GPIO 34)
             </span>
           </div>
 
@@ -389,7 +389,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">°C</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              KY-001 DS18B20 Temp Sensor (Node 2 GPIO 4)
+              KY-001 DS18B20 Temp Sensor (RPi GPIO 4)
             </span>
           </div>
 
