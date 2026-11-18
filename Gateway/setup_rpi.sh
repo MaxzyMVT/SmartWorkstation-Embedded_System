@@ -79,7 +79,7 @@ else
 fi
 
 # 6. Verify / Train AI Model
-echo "[6/6] Checking Scikit-Learn AI model..."
+echo "[6/7] Checking Scikit-Learn AI model..."
 if [ ! -f "model.joblib" ]; then
     echo "       model.joblib not found. Training model now..."
     python train_ai_model.py
@@ -87,9 +87,41 @@ else
     echo "       model.joblib already present."
 fi
 
+# 7. Configure Systemd Auto-Start Service on Boot
+echo "[7/7] Configuring systemd auto-start service (smartworkstation.service)..."
+SERVICE_USER="$(whoami)"
+SERVICE_DIR="${SCRIPT_DIR}"
+
+sudo bash -c "cat > /etc/systemd/system/smartworkstation.service <<EOF
+[Unit]
+Description=Smart Workstation Gateway Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+WorkingDirectory=${SERVICE_DIR}
+Environment=PYTHONUNBUFFERED=1
+ExecStart=${SERVICE_DIR}/.venv/bin/python ${SERVICE_DIR}/gateway_main.py --broker broker.emqx.io
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF"
+
+sudo systemctl daemon-reload
+sudo systemctl enable smartworkstation.service
+echo "       smartworkstation.service enabled to start on system boot."
+
 echo "=========================================================="
-echo "  Setup Complete! You can now start the Gateway:"
-echo "    source .venv/bin/activate"
-echo "    python gateway_main.py --broker broker.emqx.io"
-echo "  (Use --mock if testing without physical GPIO / I2C sensors)"
+echo "  Setup Complete! The Gateway service is installed and set to"
+echo "  auto-start on boot. Manage with:"
+echo "    sudo systemctl start smartworkstation"
+echo "    sudo systemctl stop smartworkstation"
+echo "    sudo systemctl status smartworkstation"
+echo "    journalctl -u smartworkstation -f"
 echo "=========================================================="

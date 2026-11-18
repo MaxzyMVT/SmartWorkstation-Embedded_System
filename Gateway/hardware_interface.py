@@ -262,19 +262,30 @@ class RPiHardware(BaseHardware):
             time.sleep(0.00001)
             GPIO.output(self.pins.ULTRASONIC_TRIG, GPIO.LOW)
 
+            pulse_start = None
             timeout_start = time.time() + 0.04
             while GPIO.input(self.pins.ULTRASONIC_ECHO) == GPIO.LOW:
                 pulse_start = time.time()
                 if pulse_start > timeout_start:
                     return None
 
+            if pulse_start is None:
+                pulse_start = time.time()
+
+            pulse_end = None
             timeout_echo = time.time() + 0.04
             while GPIO.input(self.pins.ULTRASONIC_ECHO) == GPIO.HIGH:
                 pulse_end = time.time()
                 if pulse_end > timeout_echo:
                     return None
 
+            if pulse_end is None:
+                return None
+
             pulse_duration = pulse_end - pulse_start
+            if pulse_duration <= 0:
+                return None
+
             # Speed of sound is 343 m/s = 34300 cm/s
             return (pulse_duration * 34300.0) / 2.0
 
