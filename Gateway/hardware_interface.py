@@ -2,34 +2,26 @@
 Smart Workstation - Raspberry Pi Hardware Interface Layer
 Course: 2110356 Embedded System (CEDT), Chulalongkorn University
 
-Hardware Specifications:
-- Sensors (Mandatory Requirement M1):
-    1. HC-SR04 Ultrasonic Distance Sensor (Face-to-workstation posture measurement)
-    2. BH1750 Digital Ambient Light Sensor (Reading surface illumination via I2C)
-    3. KW11-3Z Limit Switch / Emergency Stop (Curtain physical boundary safety)
-- Actuators (Mandatory Requirement M2):
-    1. 28BYJ-48 Stepper Motor + ULN2003 (Motorized Blocker Curtain, half-step drive)
-    2. 5V High-CRI LED Bar via N-Channel Logic MOSFET (Closed-loop PWM lighting)
-    3. SG90 Micro Servo (Light Bar Tilt Angle Modulation)
-
-Features:
-- Dual-mode operation: Real Raspberry Pi GPIO / I2C or Mock Simulation mode.
-- Non-blocking safety timeouts and coil de-energizing on stepper idle.
-- Median filter on ultrasonic distance to reject acoustic multipath reflections.
+Hardware Specifications (Physical BOM):
+- Local Sensors (Mandatory Requirement M1):
+    1. HC-SR04 Ultrasonic Distance Sensor (Posture distance on GPIO 23 TRIG / GPIO 24 ECHO)
+    2. KY-018 LDR Photoresistor Module (Ambient reading surface lighting on GPIO 27)
+    (Remote Sensors: Node 1 FSR402 Seat Mat | Node 2 KY-037 Sound & KY-001 DS18B20 Temp)
+- Local Actuators (Mandatory Requirement M2):
+    1. 28BYJ-48 Stepper Motor + ULN2003 (Curtain on GPIO 5, 6, 13, 19; software M7 safety bounds)
+    2. Dynamic LED Desk Lamp (Hardware PWM0 on GPIO 18 via N-Channel MOSFET)
 """
 
 from __future__ import annotations
 
 import abc
 import logging
-import math
 import os
 import random
-import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 # Configure logging
 logging.basicConfig(
@@ -53,52 +45,33 @@ STEP_SEQUENCE: List[List[int]] = [
 
 CURTAIN_TRAVEL_STEPS: int = int(os.getenv("CURTAIN_TRAVEL_STEPS", "4096"))
 
-# Check for RPi.GPIO and smbus2 availability
+# Check for RPi.GPIO availability
 _CAN_IMPORT_RPI = False
-_CAN_IMPORT_SMBUS = False
-
 try:
     import RPi.GPIO as GPIO  # type: ignore
     _CAN_IMPORT_RPI = True
 except (ImportError, RuntimeError):
     GPIO = None
 
-try:
-    from smbus2 import SMBus  # type: ignore
-    _CAN_IMPORT_SMBUS = True
-except ImportError:
-    SMBus = None
-
 
 @dataclass
 class PinConfig:
     """BCM Pin Numbering Configuration for Raspberry Pi 4 Model B."""
-    # Ultrasonic HC-SR04
-    ULTRASONIC_TRIG: int = 23
-    ULTRASONIC_ECHO: int = 24  # 5V echo line stepped down to 3.3V via 1k/2k divider
+    # 1. Ultrasonic HC-SR04
+    ULTRASONIC_TRIG: int = 23   # Pin 16
+    ULTRASONIC_ECHO: int = 24   # Pin 18 (via 1k/2k voltage divider)
 
-    # Limit Switch / Emergency Button (KW11-3Z) - optional hardware (set to -1 if using software bounds)
-    LIMIT_SWITCH: int = int(os.getenv("LIMIT_SWITCH_PIN", "-1"))
+    # 2. KY-018 LDR Photoresistor Module
+    LDR_PIN: int = int(os.getenv("LDR_PIN", "27"))  # Pin 13
 
-    # 28BYJ-48 Stepper Motor via ULN2003
-    STEPPER_IN1: int = 5
-    STEPPER_IN2: int = 6
-    STEPPER_IN3: int = 13
-    STEPPER_IN4: int = 19
+    # 3. 28BYJ-48 Stepper Motor via ULN2003
+    STEPPER_IN1: int = 5        # Pin 29
+    STEPPER_IN2: int = 6        # Pin 31
+    STEPPER_IN3: int = 13       # Pin 33
+    STEPPER_IN4: int = 19       # Pin 35
 
-    # LED Light Bar (MOSFET Gate PWM)
-    LED_PWM_PIN: int = 18      # Hardware PWM0 on RPi
-
-    # SG90 Micro Servo (PWM)
-    SERVO_PIN: int = 12        # Hardware PWM0 alternate on RPi
-
-    # Ambient Light Sensor Configuration
-    # Option A: Digital I2C BH1750 (GPIO 2 SDA / GPIO 3 SCL)
-    I2C_BUS: int = 1
-    BH1750_I2C_ADDR: int = 0x23  # 0x23 (ADDR grounded) or 0x5C (ADDR connected to VCC)
-
-    # Option B: KY-018 / LDR Module (BCM 27 -> Physical Pin 13)
-    LDR_PIN: int = int(os.getenv("LDR_PIN", "27"))
+    # 4. LED Light Bar (MOSFET Gate PWM)
+    LED_PWM_PIN: int = 18       # Pin 12 (Hardware PWM0 on RPi, 1000 Hz)
 
 
 class CurtainState:
@@ -126,12 +99,13 @@ class BaseHardware(abc.ABC):
 
     @abc.abstractmethod
     def read_lux(self) -> float:
-        """Reads ambient lighting intensity in Lux via BH1750 sensor."""
+        """Reads ambient lighting intensity in Lux via KY-018 LDR sensor."""
         ...
 
     @abc.abstractmethod
     def has_limit_switch(self) -> bool:
-        """Returns True if a physical limit switch is wired and configured."""
+        """Returns True if a physical limit switch is wired (False for software bounds)."""
+        ...
 
     @abc.abstractmethod
     def limit_switch_pressed(self) -> bool:
@@ -155,12 +129,12 @@ class BaseHardware(abc.ABC):
 
     @abc.abstractmethod
     def set_servo_angle(self, angle_deg: float) -> None:
-        """Sets the SG90 micro-servo tilt angle (0.0° to 180.0°)."""
+        """Stub for backward compatibility with telemetry schema."""
         ...
 
     @abc.abstractmethod
     def cleanup(self) -> None:
-        """Safely shuts down PWM, resets pins, and closes I2C handles."""
+        """Safely shuts down PWM and resets pins."""
         ...
 
 
@@ -171,7 +145,7 @@ class MockHardware(BaseHardware):
         self._led_duty: float = 0.0
         self._servo_angle: float = 85.0
         self._position: int = 0
-        self._base_lux: float = 300.0
+        self._base_lux: float = 480.0
         self._lock = threading.Lock()
         logger.info("Initialized MockHardware (Simulation Mode)")
 
@@ -186,13 +160,10 @@ class MockHardware(BaseHardware):
     def read_lux(self) -> float:
         with self._lock:
             # Physical closed-loop: curtain shields overhead ambient light
-            # Position 0 (OPEN) -> 100% ambient light reaches desk
-            # Position 819 (GLARE_SHIELD 40%) -> 55% reaches desk (cuts overhead glare)
-            # Position 2048 (CLOSED 100%) -> 15% reaches desk
             curtain_frac = max(0.0, min(1.0, self._position / float(CURTAIN_TRAVEL_STEPS)))
             shield_factor = max(0.15, 1.0 - (curtain_frac * 0.85))
             effective_base = self._base_lux * shield_factor
-            boost = (self._led_duty / 100.0) * 350.0
+            boost = (self._led_duty / 100.0) * 200.0
             noise = random.uniform(-1.5, 1.5)
             return round(max(0.0, effective_base + boost + noise), 1)
 
@@ -200,8 +171,7 @@ class MockHardware(BaseHardware):
         return False
 
     def limit_switch_pressed(self) -> bool:
-        # Triggered at home (OPEN, position <= 0)
-        return self._position <= 0
+        return False
 
     def step(self, direction: int) -> None:
         with self._lock:
@@ -229,23 +199,22 @@ class RPiHardware(BaseHardware):
     """Physical hardware interface for Raspberry Pi 4 Model B."""
 
     def __init__(self, pin_config: Optional[PinConfig] = None) -> None:
-        if not _CAN_IMPORT_RPI or not _CAN_IMPORT_SMBUS:
-            raise RuntimeError("RPi.GPIO or smbus2 is not available on this platform.")
+        if not _CAN_IMPORT_RPI:
+            raise RuntimeError("RPi.GPIO is not available on this platform.")
 
         self.pins = pin_config or PinConfig()
         self._lock = threading.Lock()
         self._step_phase = 0
         self._led_duty = 0.0
         self._servo_angle = 85.0
-
-        # Physical hardware handles
         self._led_pwm = None
-        self._servo_pwm = None
-        self._i2c_bus = None
         self._lux_history: List[float] = []
 
         self._init_gpio()
-        logger.info("Physical RPiHardware initialized successfully.")
+        logger.info(
+            "Physical RPiHardware initialized (HC-SR04 on GPIO %d/%d, KY-018 on GPIO %d, Stepper on GPIO 5,6,13,19, LED PWM on GPIO %d).",
+            self.pins.ULTRASONIC_TRIG, self.pins.ULTRASONIC_ECHO, self.pins.LDR_PIN, self.pins.LED_PWM_PIN
+        )
 
     @property
     def is_mock(self) -> bool:
@@ -259,9 +228,9 @@ class RPiHardware(BaseHardware):
         GPIO.setup(self.pins.ULTRASONIC_TRIG, GPIO.OUT, initial=GPIO.LOW)
         GPIO.setup(self.pins.ULTRASONIC_ECHO, GPIO.IN)
 
-        # 2. Limit Switch (optional; disabled when < 0, software bounds active)
-        if self.pins.LIMIT_SWITCH >= 0:
-            GPIO.setup(self.pins.LIMIT_SWITCH, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        # 2. KY-018 LDR Photoresistor Module
+        if self.pins.LDR_PIN >= 0:
+            GPIO.setup(self.pins.LDR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
         # 3. 28BYJ-48 Stepper Motor Pins
         for pin in (self.pins.STEPPER_IN1, self.pins.STEPPER_IN2, self.pins.STEPPER_IN3, self.pins.STEPPER_IN4):
@@ -271,25 +240,6 @@ class RPiHardware(BaseHardware):
         GPIO.setup(self.pins.LED_PWM_PIN, GPIO.OUT, initial=GPIO.LOW)
         self._led_pwm = GPIO.PWM(self.pins.LED_PWM_PIN, 1000)
         self._led_pwm.start(0.0)
-
-        # 5. SG90 Servo PWM (50 Hz)
-        GPIO.setup(self.pins.SERVO_PIN, GPIO.OUT, initial=GPIO.LOW)
-        self._servo_pwm = GPIO.PWM(self.pins.SERVO_PIN, 50)
-        self._servo_pwm.start(0)
-
-        # 6. Light Sensor Setup: BH1750 I2C & KY-018 LDR GPIO
-        if self.pins.LDR_PIN >= 0:
-            GPIO.setup(self.pins.LDR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-        self._has_bh1750 = False
-        try:
-            self._i2c_bus = SMBus(self.pins.I2C_BUS)
-            # Power on BH1750
-            self._i2c_bus.write_byte(self.pins.BH1750_I2C_ADDR, 0x01)
-            self._has_bh1750 = True
-            logger.info("BH1750 digital light sensor initialized on I2C bus %d (0x%02X).", self.pins.I2C_BUS, self.pins.BH1750_I2C_ADDR)
-        except Exception:
-            logger.info("BH1750 I2C not detected; using KY-018 LDR (GPIO %d) or nominal ambient light.", self.pins.LDR_PIN)
 
     def read_distance_cm(self) -> float:
         # Collect 3 pings and use median to reject acoustic multipath spikes
@@ -329,48 +279,32 @@ class RPiHardware(BaseHardware):
             return (pulse_duration * 34300.0) / 2.0
 
     def read_lux(self) -> float:
-        raw_lux: Optional[float] = None
-        if getattr(self, "_has_bh1750", False) and self._i2c_bus is not None:
+        """Reads ambient lighting intensity via KY-018 LDR module.
+        Active LOW:
+          - GPIO.LOW (0)  -> Light sufficient (~480 Lux, OPTIMAL_STUDY)
+          - GPIO.HIGH (1) -> Dark / covered / shaded (~180 Lux, INSUFFICIENT_LIGHT)
+        """
+        raw_lux: float = 480.0
+        if self.pins.LDR_PIN >= 0:
             try:
-                with self._lock:
-                    data = self._i2c_bus.read_i2c_block_data(self.pins.BH1750_I2C_ADDR, 0x10, 2)
-                raw_val = (data[0] << 8) | data[1]
-                raw_lux = raw_val / 1.2
-            except Exception as e:
-                now = time.time()
-                if not hasattr(self, "_last_lux_warn") or (now - self._last_lux_warn > 30.0):
-                    self._last_lux_warn = now
-                    logger.warning("BH1750 read error (%s); falling back to LDR GPIO.", e)
-
-        # Fallback to KY-018 / LDR module on GPIO pin if BH1750 unavailable
-        if raw_lux is None and self.pins.LDR_PIN >= 0:
-            try:
-                # Active LOW: 0 = Light sufficient (~480 Lux), 1 = Dark (<200 Lux)
-                is_dark = GPIO.input(self.pins.LDR_PIN) == GPIO.HIGH
+                is_dark = (GPIO.input(self.pins.LDR_PIN) == GPIO.HIGH)
                 raw_lux = 180.0 if is_dark else 480.0
             except Exception:
-                raw_lux = 450.0
+                raw_lux = 480.0
 
-        if raw_lux is None:
-            raw_lux = 450.0  # Nominal daytime study light fallback
-
-        # 5-sample moving median filter to reject shadow spikes and noise
+        # 3-sample moving median filter to reject shadow spikes and noise
         with self._lock:
             self._lux_history.append(raw_lux)
-            if len(self._lux_history) > 5:
+            if len(self._lux_history) > 3:
                 self._lux_history.pop(0)
             sorted_history = sorted(self._lux_history)
-            filtered = sorted_history[len(sorted_history) // 2]
-            return round(filtered, 1)
+            return round(sorted_history[len(sorted_history) // 2], 1)
 
     def has_limit_switch(self) -> bool:
-        return self.pins.LIMIT_SWITCH >= 0
+        return False
 
     def limit_switch_pressed(self) -> bool:
-        if not self.has_limit_switch():
-            return False
-        # Pin pulled HIGH; switch connects to GND (active LOW)
-        return GPIO.input(self.pins.LIMIT_SWITCH) == GPIO.LOW
+        return False
 
     def step(self, direction: int) -> None:
         with self._lock:
@@ -399,14 +333,7 @@ class RPiHardware(BaseHardware):
             self._led_pwm.ChangeDutyCycle(self._led_duty)
 
     def set_servo_angle(self, angle_deg: float) -> None:
-        angle_deg = max(0.0, min(180.0, float(angle_deg)))
         self._servo_angle = round(angle_deg, 1)
-        if self._servo_pwm is not None:
-            # Map 0° -> 2.5% duty, 180° -> 12.5% duty
-            duty = 2.5 + (self._servo_angle / 18.0)
-            self._servo_pwm.ChangeDutyCycle(duty)
-            time.sleep(0.12)
-            self._servo_pwm.ChangeDutyCycle(0)  # Silence servo motor hum
 
     def cleanup(self) -> None:
         logger.info("Cleaning up RPi GPIO and PWM handles...")
@@ -414,12 +341,8 @@ class RPiHardware(BaseHardware):
             self.set_led_duty(0.0)
             if self._led_pwm:
                 self._led_pwm.stop()
-            if self._servo_pwm:
-                self._servo_pwm.stop()
             self.release_stepper()
             GPIO.cleanup()
-            if self._i2c_bus:
-                self._i2c_bus.close()
         except Exception as e:
             logger.warning("Error during GPIO cleanup: %s", e)
 
@@ -428,8 +351,8 @@ def create_hardware(mock: bool = False) -> BaseHardware:
     """Factory creating either real RPiHardware or simulated MockHardware."""
     if mock:
         return MockHardware()
-    if not _CAN_IMPORT_RPI or not _CAN_IMPORT_SMBUS:
-        logger.info("RPi.GPIO or smbus2 not installed; using MockHardware.")
+    if not _CAN_IMPORT_RPI:
+        logger.info("RPi.GPIO not installed; using MockHardware.")
         return MockHardware()
     try:
         return RPiHardware()

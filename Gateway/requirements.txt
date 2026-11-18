@@ -17,5 +17,4 @@ scikit-learn>=1.2.0
 joblib>=1.2.0
 
 # Raspberry Pi Physical Hardware Interfaces (Linux Only)
-smbus2>=0.4.2; platform_system == "Linux"
 RPi.GPIO>=0.7.1; platform_system == "Linux"
