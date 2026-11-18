@@ -60,6 +60,8 @@ class PinConfig:
     # 1. Ultrasonic HC-SR04
     ULTRASONIC_TRIG: int = 23   # Pin 16
     ULTRASONIC_ECHO: int = 24   # Pin 18 (via 1k/2k voltage divider)
+    # Hardware calibration: compensates for transducer ringing blind zone and frame bezel
+    DISTANCE_OFFSET_CM: float = float(os.getenv("DISTANCE_OFFSET_CM", "5.5"))
 
     # 2. KY-018 LDR Photoresistor Module
     LDR_PIN: int = int(os.getenv("LDR_PIN", "27"))  # Pin 13
@@ -246,14 +248,18 @@ class RPiHardware(BaseHardware):
         pings: List[float] = []
         for _ in range(3):
             val = self._single_ultrasonic_ping()
-            if val is not None and 2.0 <= val <= 250.0:
+            if val is not None and 1.0 <= val <= 250.0:
                 pings.append(val)
             time.sleep(0.005)
 
         if not pings:
-            return 999.0  # Out of range / no object detected
+            return 999.0  # Out of range / sensor unplugged
         pings.sort()
-        return round(pings[len(pings) // 2], 1)
+        raw_median = pings[len(pings) // 2]
+
+        # Apply calibration offset (compensating for transducer ringing and enclosure bezel)
+        calibrated = max(2.0, raw_median - self.pins.DISTANCE_OFFSET_CM)
+        return round(calibrated, 1)
 
     def _single_ultrasonic_ping(self) -> Optional[float]:
         with self._lock:
@@ -262,25 +268,18 @@ class RPiHardware(BaseHardware):
             time.sleep(0.00001)
             GPIO.output(self.pins.ULTRASONIC_TRIG, GPIO.LOW)
 
-            pulse_start = None
-            timeout_start = time.time() + 0.04
+            t0 = time.perf_counter()
+            timeout_start = t0 + 0.04
             while GPIO.input(self.pins.ULTRASONIC_ECHO) == GPIO.LOW:
-                pulse_start = time.time()
-                if pulse_start > timeout_start:
+                if time.perf_counter() > timeout_start:
                     return None
+            pulse_start = time.perf_counter()
 
-            if pulse_start is None:
-                pulse_start = time.time()
-
-            pulse_end = None
-            timeout_echo = time.time() + 0.04
+            timeout_echo = pulse_start + 0.04
             while GPIO.input(self.pins.ULTRASONIC_ECHO) == GPIO.HIGH:
-                pulse_end = time.time()
-                if pulse_end > timeout_echo:
+                if time.perf_counter() > timeout_echo:
                     return None
-
-            if pulse_end is None:
-                return None
+            pulse_end = time.perf_counter()
 
             pulse_duration = pulse_end - pulse_start
             if pulse_duration <= 0:
