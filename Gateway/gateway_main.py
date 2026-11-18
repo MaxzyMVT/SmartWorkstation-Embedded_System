@@ -15,6 +15,14 @@ never from raw-sensor if/else (rubric M4).
 Usage:
     python gateway_main.py --mock --broker localhost      # laptop simulation
     python gateway_main.py --broker localhost             # on the Pi
+
+Systemd Service Management (Raspberry Pi auto-start daemon):
+    sudo systemctl status smartworkstation                # Check daemon health & uptime
+    sudo systemctl restart smartworkstation               # Restart service after code changes
+    sudo systemctl stop smartworkstation                  # Stop daemon
+    sudo systemctl start smartworkstation                 # Start daemon
+    sudo journalctl -u smartworkstation -f                # Live follow gateway logs
+    sudo journalctl -u smartworkstation -n 100 --no-pager # View last 100 log entries
 """
 from __future__ import annotations
 

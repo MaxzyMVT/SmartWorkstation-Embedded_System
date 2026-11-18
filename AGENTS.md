@@ -152,6 +152,12 @@ python gateway_main.py --broker broker.emqx.io
 
 # Train / retrain AI model if features or weights change:
 python train_ai_model.py
+
+# Systemd background service management (auto-start daemon):
+sudo systemctl status smartworkstation          # View daemon status & uptime
+sudo journalctl -u smartworkstation -f          # Stream live daemon logs
+sudo journalctl -u smartworkstation -n 100 --no-pager  # View last 100 lines
+sudo systemctl restart smartworkstation         # Restart service after updates
 ```
 
 ### 4.5 Unified Telemetry Output for Web Dashboard

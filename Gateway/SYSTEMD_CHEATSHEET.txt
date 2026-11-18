@@ -1,0 +1,56 @@
+================================================================================
+SMART WORKSTATION - SYSTEMD DAEMON CHEATSHEET
+================================================================================
+Service Name: smartworkstation.service
+Unit File:    /etc/systemd/system/smartworkstation.service
+Working Dir:  /home/maxzymvt/SmartWorkstation-Embedded_System/Gateway
+Venv Python:  /home/maxzymvt/SmartWorkstation-Embedded_System/Gateway/.venv/bin/python
+
+--------------------------------------------------------------------------------
+1. LOGGING & MONITORING
+--------------------------------------------------------------------------------
+# Stream live logs in real time (press Ctrl+C to exit):
+sudo journalctl -u smartworkstation -f
+
+# View the last 100 log lines (without entering pager):
+sudo journalctl -u smartworkstation -n 100 --no-pager
+
+# View logs since the current system boot:
+sudo journalctl -u smartworkstation -b --no-pager
+
+# View logs since 10 minutes ago:
+sudo journalctl -u smartworkstation --since "10 min ago" --no-pager
+
+# View only error logs (priority 3 or higher):
+sudo journalctl -u smartworkstation -p err --no-pager
+
+--------------------------------------------------------------------------------
+2. SERVICE LIFECYCLE (START / STOP / RESTART)
+--------------------------------------------------------------------------------
+# Check current runtime status and active PID:
+sudo systemctl status smartworkstation
+
+# Restart the service (e.g. after pulling git updates):
+sudo systemctl restart smartworkstation
+
+# Stop the daemon:
+sudo systemctl stop smartworkstation
+
+# Start the daemon:
+sudo systemctl start smartworkstation
+
+--------------------------------------------------------------------------------
+3. AUTO-START ON BOOT CONFIGURATION
+--------------------------------------------------------------------------------
+# Check if service is enabled to launch automatically when Pi powers on:
+systemctl is-enabled smartworkstation
+
+# Enable auto-start on boot:
+sudo systemctl enable smartworkstation
+
+# Disable auto-start on boot:
+sudo systemctl disable smartworkstation
+
+# Reload systemd manager configuration (if unit file was edited):
+sudo systemctl daemon-reload
+================================================================================

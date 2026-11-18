@@ -109,11 +109,32 @@ cp .env.example .env
 
 ### 3. Launch the Gateway Daemon
 ```bash
-# On physical Raspberry Pi:
+# On physical Raspberry Pi (manual foreground execution):
 python gateway_main.py
 
 # On Laptop (forcing mock simulation):
 python gateway_main.py --mock
+```
+
+### 4. Background Service Management (Systemd)
+The gateway daemon runs in the background as a systemd service (`smartworkstation.service`) that automatically launches on boot.
+
+```bash
+# Check service status and PID
+sudo systemctl status smartworkstation
+
+# Stream live real-time daemon logs (press Ctrl+C to exit)
+sudo journalctl -u smartworkstation -f
+
+# View the last 100 log lines
+sudo journalctl -u smartworkstation -n 100 --no-pager
+
+# Restart service (e.g. after code update or git pull)
+sudo systemctl restart smartworkstation
+
+# Stop / Start service
+sudo systemctl stop smartworkstation
+sudo systemctl start smartworkstation
 ```
 
 ---
