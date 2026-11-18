@@ -112,22 +112,20 @@ void vTaskSoundSample(void *) {
 // KY-018 LDR Calibration (Continuous 12-bit Analog Lux Reading)
 // ----------------------------------------------------------------------------
 float adcToLux(uint16_t adc) {
-  // Calibrated for physical KY-018 LDR voltage divider on ESP32 ADC:
-  // - Covered by hand (adc ~2000-2900): 80 - 250 Lux (Triggers LOW_LIGHT < 300)
-  // - Room light      (adc ~3600-3900): 420 - 580 Lux (OPTIMAL_STUDY 350-700)
-  // - Flashlight/Glare(adc >= 4000):    750 - 1600 Lux (Triggers HARSH_GLARE > 750)
+  // Calibrated for KY-018 LDR on ESP32 ADC:
+  // With a 10k resistor from GPIO 34 to GND (5k effective pull-down):
+  // - Dark / Covered (adc <= 2200):   80 - 250 Lux (LOW_LIGHT < 300)
+  // - Room light     (adc 2600-3600): 420 - 580 Lux (OPTIMAL_STUDY 350-700)
+  // - Direct Glare   (adc >= 3900):   780 - 1500+ Lux (HARSH_GLARE > 750)
   float lux;
   if (adc <= 2200) {
-    lux = 80.0f + (static_cast<float>(adc) / 2200.0f) * 70.0f;
+    lux = 80.0f + (static_cast<float>(adc) / 2200.0f) * 170.0f; // 80 - 250 Lux
   } else if (adc < 3600) {
     const float t = static_cast<float>(adc - 2200) / 1400.0f;
-    lux = 150.0f + t * 270.0f;
-  } else if (adc < 4000) {
-    const float t = static_cast<float>(adc - 3600) / 400.0f;
-    lux = 420.0f + t * 260.0f;
+    lux = 250.0f + t * 350.0f; // 250 - 600 Lux (Nominal ~480-520 at 3100)
   } else {
-    const float t = (adc >= 4095) ? 1.0f : static_cast<float>(adc - 4000) / 95.0f;
-    lux = 750.0f + t * 850.0f;
+    const float t = (adc >= 4095) ? 1.0f : static_cast<float>(adc - 3600) / 495.0f;
+    lux = 600.0f + t * 900.0f; // 600 - 1500 Lux (Flashlight/sunlight triggers > 750)
   }
   return roundf(lux * 10.0f) / 10.0f;
 }
