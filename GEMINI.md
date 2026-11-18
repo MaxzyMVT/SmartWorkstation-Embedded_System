@@ -55,7 +55,7 @@ Use one of the following lowercase scopes (or omit scope if change is global):
 ### 2.4 Concrete Commit Examples
 - `feat(node1): add FreeRTOS seat sampling task with debouncing`
 - `feat(node1): implement ext0 deep sleep wake-up on GPIO 33`
-- `feat(node2): implement 50ms windowed ADC sampling for MAX9814`
+- `feat(node2): implement 50ms windowed ADC sampling for KY-037`
 - `fix(gateway): resolve deadlock in thread-safe state lock`
 - `refactor(hardware): separate mock peripheral simulation from RPi GPIO`
 - `feat(interface): integrate real-time MQTT WebSocket telemetry feed`
@@ -110,7 +110,7 @@ npm run build
 
 When writing code, you must never violate these project constraints:
 
-1. **Sensors (M1)**: Buttons and switches are **NOT** environmental sensors. Do not count limit switches or seat switches toward the 5 sensor types. True sensors are: Ultrasonic, BH1750 Lux, FSR Pressure, DHT22 Temperature, MAX9814 Sound.
+1. **Sensors (M1)**: Buttons and switches are **NOT** environmental sensors. Do not count limit switches or seat switches toward the 5 sensor types. True sensors are: Ultrasonic (HC-SR04), Light (KY-018 LDR), Pressure (FSR402 Force Sensing Resistor), Temperature (KY-001 DS18B20), Sound (KY-037 Mic).
 2. **Actuators (M2)**: LEDs and buzzers are **NOT** actuators. Actuators are physical motion devices: 28BYJ-48 Stepper Motor and SG90 Servo Motor.
 3. **AI Logic (M4)**: Fixed thresholds or if-else ladders do **NOT** count as AI. Closed-loop control must be driven by the trained `RandomForestClassifier` pipeline (`model.joblib`).
 4. **Depth Items (E1–E5)**:

@@ -271,8 +271,8 @@ void setup() {
   delay(500);
   Serial.println("\n==========================================");
   Serial.println("  SmartWorkstation - Sensor Node 2 (Desk) ");
-  Serial.println("  GPIO 4 : DHT22 / DS18B20 Temp Sensor    ");
-  Serial.println("  GPIO 35: MAX9814 Acoustic Sound Sensor  ");
+  Serial.println("  GPIO 4 : KY-001 DS18B20 Temp Sensor     ");
+  Serial.println("  GPIO 35: KY-037 Sound Detection Sensor  ");
   Serial.println("==========================================");
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
     if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {

@@ -276,7 +276,7 @@ export default function App() {
               {telemetry.seat ? 'SEATED' : 'EMPTY'}
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              FSR402 Mat (Node 1 Pin 33)
+              FSR402 Force Sensing Resistor (Node 1 GPIO 33)
             </span>
           </div>
 
@@ -307,7 +307,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">cm</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              HC-SR04 (RPi GPIO 23/24)
+              HC-SR04 Ultrasonic Sensor (RPi GPIO 23/24)
             </span>
           </div>
 
@@ -348,7 +348,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">Lux</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              KY-018 LDR Module
+              KY-018 LDR Photoresistor (RPi GPIO 27)
             </span>
           </div>
 
@@ -389,7 +389,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">°C</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              KY-001 DS18B20 (Node 2 GPIO 4)
+              KY-001 DS18B20 Temp Sensor (Node 2 GPIO 4)
             </span>
           </div>
 
@@ -430,7 +430,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">dB</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              KY-037 Mic (Node 2 GPIO 35)
+              KY-037 Sound Sensor (Node 2 GPIO 35)
             </span>
           </div>
 

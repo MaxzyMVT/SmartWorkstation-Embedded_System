@@ -1,9 +1,8 @@
 # Node 2 desk environment monitor
 
-ESP32 DOIT DevKit V1: MAX9814 OUT to ADC1 GPIO 35, DHT22 data
+ESP32 DOIT DevKit V1: KY-037 Sound Sensor OUT to ADC1 GPIO 35, KY-001 DS18B20 data
 (with 4.7 kohm pull-up to 3.3 V) to GPIO 4. Use a common ground.
-The alternative DS18B20 uses GPIO 4 and the same pull-up; connect only
-one temperature sensor. Power the DS18B20 externally (not parasite mode).
+Power the DS18B20 externally (not parasite mode).
 
 ## Build
 
@@ -18,9 +17,8 @@ Firmware binaries contain the configured credentials; keep them private.
 Install PlatformIO, then run from this directory:
 
 ```
-pio run                         # Build both temperature variants
-pio run -e esp32doit-devkit-v1    # DHT22
-pio run -e node2-ds18b20          # DS18B20
+pio run                         # Build KY-001 DS18B20 firmware (default)
+pio run -e node2-ds18b20          # Explicit DS18B20 target
 ```
 
 Use `pio run -e <environment> -t upload` to flash and
@@ -44,7 +42,7 @@ The conversion is `reference_db + 20*log10(peak_to_peak/reference_counts)`;
 zero amplitude is floored to one ADC count to keep output finite.
 Default reference: 100 counts at 60 dB. Set build definitions
 `NODE2_SOUND_REFERENCE_COUNTS` and `NODE2_SOUND_REFERENCE_DB` from measurements
-against a reference meter at the installed gain. MAX9814 AGC and the lack of
+against a reference meter at the installed gain. KY-037 sensitivity and the lack of
 A-weighting limit accuracy; verify several levels before using AI thresholds.
 
 ## Hardware checks (require an ESP32 and sensors)
@@ -106,7 +104,7 @@ duplicate ACKs, FIFO drain, ring wrap, and sequence rollover. These are logic
 tests, not hardware/network tests. The Python tests check missing configuration,
 quoting, environment overrides, and rejection of malformed settings.
 
-Verified on 2026-11-15: `pio run` passed both DHT22 and DS18B20 builds, with
+Verified on 2026-11-15: `pio run` passed DS18B20 build, with
 empty configuration and with synthetic network settings to exercise linking of
 the complete Wi-Fi/MQTT path. Buffer tests and all three configuration tests
 passed. OneWire 2.3.8 emits upstream `#undef` warnings; builds still succeed.

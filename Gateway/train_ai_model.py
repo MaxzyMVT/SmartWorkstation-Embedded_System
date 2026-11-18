@@ -9,11 +9,11 @@ Machine Learning model (Random Forest / Decision Tree) with multi-dimensional de
 boundaries, evaluates inference latency (<10ms target), and serializes the model.
 
 Feature Vector (6 Features):
-    0: presence (0 or 1 from FSR402 pressure plate)
-    1: distance_cm (HC-SR04 face-to-book distance, cm)
-    2: lux (BH1750 ambient reading surface illumination, Lux)
-    3: temp_c (DS18B20/DHT22 ambient temperature, °C)
-    4: sound_db (MAX9814/KY-037 ambient noise level, dB)
+    0: presence (0 or 1 from FSR402 Force Sensing Resistor)
+    1: distance_cm (HC-SR04 ultrasonic face distance, cm)
+    2: lux (KY-018 LDR ambient illumination, Lux)
+    3: temp_c (KY-001 DS18B20 ambient temperature, °C)
+    4: sound_db (KY-037 acoustic noise level, dB)
     5: sitting_duration_min (Continuous sitting duration, minutes)
 
 Classes:

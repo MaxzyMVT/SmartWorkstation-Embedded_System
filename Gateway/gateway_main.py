@@ -3,12 +3,12 @@
 
 Pipeline, once per second (AGENTS.md sections 4.2 / 4.5):
     MQTT node1 + node2  --\
-    HC-SR04 + BH1750    ---+--> feature vector --> SmartWorkstationAI (model.joblib, <10 ms)
-                                   --> actuators (stepper curtain, SG90 servo, PWM LED bar)
+    HC-SR04 + KY-018    ---+--> feature vector --> SmartWorkstationAI (model.joblib, <10 ms)
+                                   --> actuators (28BYJ-48 stepper curtain, PWM LED bar)
                                    --> smart_workstation/telemetry (MQTT, 1 Hz)
                                    --> SQLite outbox --> Firestore (M5)   |  Discord / LINE alerts (M6)
 
-Closed loop: actuators change the room, the next BH1750/HC-SR04 reading sees the
+Closed loop: actuators change the room, the next KY-018/HC-SR04 reading sees the
 change, and the model decides again. Actuator decisions come from the model's class,
 never from raw-sensor if/else (rubric M4).
 

@@ -12,13 +12,13 @@
 **Smart Workstation** is a modular, portable tabletop enclosure ($70 \times 50 \times 60\text{ cm}$) placed over a study/work desk. It creates an ergonomically controlled, distraction-free environment for students and desk workers.
 
 ### Closed-Loop Architecture
-1. **Sensor Node 1 (Chair)**: ESP32 + FSR / Pressure mat. Detects seating presence, monitors cumulative study time, and features deep/light sleep with interrupt wake-up.
-2. **Sensor Node 2 (Enclosure Wall)**: ESP32 + Ambient Temperature (DHT22 / DS18B20) + Sound level sensor (MAX9814 / KY-037). Monitors acoustic noise and thermal comfort.
-3. **Gateway (Front Arch / Roof)**: Raspberry Pi 4 (or ESP32) + Ultrasonic distance sensor (HC-SR04 at $45^\circ$) + Ambient light sensor (BH1750 I2C) + Safety limit switch (KW11-3Z).
+1. **Sensor Node 1 (Chair)**: ESP32 + FSR402 Force Sensing Resistor (seat pressure mat). Detects seating presence, monitors cumulative study time, and features deep sleep with GPIO 33 interrupt wake-up.
+2. **Sensor Node 2 (Enclosure Wall)**: ESP32 + KY-001 DS18B20 1-Wire temperature sensor + KY-037 sound detection sensor. Monitors acoustic noise and thermal comfort.
+3. **Gateway (Front Arch / Roof)**: Raspberry Pi 4 + HC-SR04 ultrasonic distance sensor + KY-018 LDR photoresistor module.
 4. **Actuators (Closed-Loop)**:
-   - **Motorized Blocker Curtain**: 28BYJ-48 Stepper motor + ULN2003 driver. Automatically lowers to enforce break time or block workspace during poor posture/lighting/noise; opens when normal conditions resume.
-   - **Adaptive Lighting Bar**: High-CRI 5V LED bar driven by PWM MOSFET (proportional feedback maintaining ~450 Lux on desk) + SG90 servo motor for dynamic tilt angle.
-5. **On-Device AI Engine**: Scikit-Learn multi-class model (`RandomForestClassifier`, 6 inputs, 7 states, inference $<10\text{ ms}$) processing posture and environmental data in real time to trigger closed-loop actions.
+   - **Motorized Blocker Curtain**: 28BYJ-48 Stepper motor + ULN2003 driver with M7 software bounds. Automatically lowers to enforce break time or shield against severe noise / drafts; opens when normal conditions resume.
+   - **Adaptive Task Lighting**: High-CRI 5V LED lamp driven by PWM MOSFET (proportional feedback maintaining optimal desk illumination).
+5. **On-Device AI Engine**: Scikit-Learn multi-class model (`RandomForestClassifier`, 6 inputs, 9 states, inference $<10\text{ ms}$) processing posture and environmental data in real time to trigger closed-loop actions.
 6. **Cloud & Dashboard**: MQTT over TLS $\rightarrow$ Cloud broker & storage $\rightarrow$ React Web Dashboard (`Interface/`) + Automated Webhook notifications (Discord / LINE).
 
 ---
@@ -35,13 +35,13 @@ Total: 70 Points = I (5) + II (5) + II′ (10) + III (20) + IV (10) + V (10) + V
 
 | Code | Requirement | Course Definition & Strict Rules | Smart Workstation Implementation Status |
 | :--- | :--- | :--- | :--- |
-| **M1** | $\ge 5$ distinct sensor types ($\ge 2$ on Node, $\ge 2$ on Gateway) | Buttons/switches do **not** count. Internal MCU sensors do **not** count. Dual-reading modules (e.g., DHT22 temp+hum) count as **1** type. Off-the-shelf devices do not count. | **Pass (5 types total)**:<br>• **Gateway (2)**: HC-SR04 Ultrasonic, BH1750 Lux Meter<br>• **Node 1 (1)**: FSR Pressure Plate<br>• **Node 2 (2)**: Temperature Sensor, MAX9814 Sound Sensor |
-| **M2** | $\ge 1$ physical actuator in closed loop | LEDs, buzzers, speakers, displays do **not** count as actuators. Vibration motors count only if doing mechanical work. Must produce physical motion. | **Pass (2 actuators)**:<br>• 28BYJ-48 Stepper Motor (rolls curtain up/down)<br>• SG90 Micro Servo (adjusts lighting angle)<br>• (High-CRI LED bar PWM for lighting) |
-| **M3** | Wired or wireless node-to-gateway transmission | Must transmit from sensor nodes to gateway (nodes do **not** connect directly to cloud). | **Pass**: ESP-NOW or MQTT/Wi-Fi with structured JSON telemetry payload (`node_id`, sequence, sensor payload). |
-| **M4** | AI component in closed loop | Must process camera/mic/sensor data and drive actuator decisions. **Fixed thresholds and if-else rules are strictly prohibited.** | **Pass**: On-device multi-variable Random Forest classifier taking 6 sensor features and predicting workstation state to actuate curtain/servo. |
-| **M5** | Cloud storage & Dashboard | Raw sensor data stored in cloud and retrievable via dashboard. | **Pass**: MQTT / Firebase / NETPIE + React Vite Web Dashboard (`Interface/`). |
+| **M1** | $\ge 5$ distinct sensor types ($\ge 2$ on Node, $\ge 2$ on Gateway) | Buttons/switches do **not** count. Internal MCU sensors do **not** count. Dual-reading modules count as **1** type. Off-the-shelf devices do not count. | **Pass (5 types total)**:<br>• **Gateway (2)**: HC-SR04 Ultrasonic, KY-018 LDR Module<br>• **Node 1 (1)**: FSR402 Force Sensing Resistor<br>• **Node 2 (2)**: KY-001 DS18B20 Temp, KY-037 Sound Sensor |
+| **M2** | $\ge 1$ physical actuator in closed loop | LEDs, buzzers, speakers, displays do **not** count as actuators. Vibration motors count only if doing mechanical work. Must produce physical motion. | **Pass (Physical Actuator)**:<br>• 28BYJ-48 Stepper Motor (rolls curtain up/down via ULN2003)<br>• (Supplementary Dynamic PWM LED lamp via MOSFET) |
+| **M3** | Wired or wireless node-to-gateway transmission | Must transmit from sensor nodes to gateway (nodes do **not** connect directly to cloud). | **Pass**: Wi-Fi MQTT with structured JSON telemetry payload (`node_id`, sequence, sensor payload). |
+| **M4** | AI component in closed loop | Must process camera/mic/sensor data and drive actuator decisions. **Fixed thresholds and if-else rules are strictly prohibited.** | **Pass**: On-device 9-class Random Forest classifier taking 6 sensor features and predicting workstation state to actuate curtain. |
+| **M5** | Cloud storage & Dashboard | Raw sensor data stored in cloud and retrievable via dashboard. | **Pass**: MQTT / Firebase + React Vite Web Dashboard (`Interface/`). |
 | **M6** | Event Notification System | Automated alerts for critical events/status. | **Pass**: Discord & LINE Notify webhooks on posture violation, noise warning, curtain closing, and session completion. |
-| **M7** | Safety compliance | Enclosed relays/mains, liquid separation, battery protection, moving parts must have safety stops (limit switch/timeout). | **Pass**: Physical limit switch (KW11-3Z) + software timeout on curtain stepper motor. No exposed high voltage. |
+| **M7** | Safety compliance | Enclosed relays/mains, liquid separation, battery protection, moving parts must have safety stops (limit switch/timeout). | **Pass**: Software travel bounds (0..4096), motor watchdog timeout, ULN2003 coil idle release. No exposed high voltage. |
 | **M8** | Public Git repository with history from all members | Commit history from **every** group member. | **Pass**: GitHub repository with conventional commits from all 5 members. |
 
 ---
@@ -96,7 +96,7 @@ We target 5 designated items:
 - **Quantitative Metrics (4 pts)**: Must measure at least **3 metrics** with real data and stated methodology (3 pts), **plus repeated trials reporting mean, min, max, and variance** (1 pt).
   1. **End-to-End Latency**: Time elapsed from sensor trigger (e.g., sitting down / leaning forward) to physical curtain actuation and web dashboard update ($N \ge 30$ trials).
   2. **Packet Delivery Rate (PDR)**: Percentage of wireless packets successfully received between ESP32 nodes and Gateway under varying distances and obstacles ($N \ge 1000$ packets).
-  3. **Sensor Accuracy Validation**: BH1750 Lux readings compared against a calibrated reference digital lux meter; Temperature readings compared against a laboratory thermometer.
+  3. **Sensor Accuracy Validation**: KY-018 LDR readings compared against ambient light levels; KY-001 Temperature readings compared against a laboratory thermometer; KY-037 Sound readings compared against a sound level meter.
   4. **Power Consumption & Battery Life**: Current draw measured across Active, IDLE, and Deep Sleep states on Node 1, calculating expected runtime on a standard battery.
   5. **AI Inference & Accuracy**: Confusion matrix, Precision, Recall, F1-Score, and inference latency distribution ($<10\text{ ms}$).
 - **Analysis & Comparison (3 pts)**: Compare measured metrics against project goals AND existing commercial smart desk/ergonomic devices.

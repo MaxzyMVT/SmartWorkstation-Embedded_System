@@ -11,17 +11,15 @@
 This component serves as the central intelligent edge controller for the Smart Workstation:
 
 - **Requirement M1 (≥2 Local Wired Sensors)**:
-  1. **HC-SR04 Ultrasonic Distance Sensor**: Measures face-to-book distance angled at 45° from the workstation front arch.
-  2. **BH1750 Digital Ambient Light Sensor**: Measures illumination directly on the study surface via I2C (`0x23`).
-  3. **KW11-3Z Limit Switch**: Hardware interrupt-driven physical barrier safety sensor.
+  1. **HC-SR04 Ultrasonic Distance Sensor**: Measures face-to-book distance angled at 45° from the workstation front arch (GPIO 23 TRIG, GPIO 24 ECHO).
+  2. **KY-018 LDR Photoresistor Module**: Measures ambient reading surface illumination directly on the desk (GPIO 27).
 - **Requirement M2 (Closed-Loop Physical Actuators)**:
-  1. **Motorized Blocker Curtain (28BYJ-48 Stepper + ULN2003)**: Half-step driven barrier that rolls down when poor posture or eye strain is detected, and rolls up when ergonomic conditions return.
-  2. **High-CRI 5V LED Bar**: Driven via logic-level MOSFET using closed-loop PWM (proportional controller maintaining ~450 Lux on the desk).
-  3. **SG90 Micro Servo**: Dynamically adjusts tilt angle (0°–180°) of the light beam.
+  1. **Motorized Blocker Curtain (28BYJ-48 Stepper + ULN2003)**: Half-step driven barrier that rolls down when poor posture, severe noise, or eye strain is detected, with M7 software bounds.
+  2. **High-CRI 5V LED Bar**: Driven via logic-level MOSFET using closed-loop PWM (proportional controller maintaining optimal study lighting).
 - **Requirement M4 & E7 (Genuine On-Device Machine Learning)**:
   - *No simple if-else logic or fixed thresholds.*
-  - Multi-dimensional classification pipeline trained with `scikit-learn` (`RandomForestClassifier`, 100 trees, 6 features, 7 classes).
-  - Inference latency strictly **< 10 ms** (mean ~0.5 ms).
+  - Multi-dimensional classification pipeline trained with `scikit-learn` (`RandomForestClassifier`, 100 trees, 6 features, 9 classes).
+  - Inference latency strictly **< 10 ms** (mean ~5 ms on Raspberry Pi).
 - **IoT & Alerts**:
   - Ingests wireless ESP32 telemetry from `smart_workstation/node1` and `smart_workstation/node2`.
   - Publishes consolidated JSON telemetry to `smart_workstation/telemetry` for the React Web Dashboard (`Interface/`).
@@ -33,11 +31,9 @@ This component serves as the central intelligent edge controller for the Smart W
 
 | Peripheral | Component | Physical Pin | BCM GPIO | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **I2C SDA** | BH1750 Lux Sensor | Pin 3 | **GPIO 2** | I2C Bus 1 (Default Address `0x23`) |
-| **I2C SCL** | BH1750 Lux Sensor | Pin 5 | **GPIO 3** | I2C Bus 1 |
+| **Light Sensor** | KY-018 LDR Module | Pin 13 | **GPIO 27** | Active LOW, 3.3V power |
 | **Ultrasonic TRIG** | HC-SR04 | Pin 16 | **GPIO 23** | 10µs trigger pulse output |
-| **Ultrasonic ECHO** | HC-SR04 | Pin 18 | **GPIO 24** | **Requires 1kΩ / 2kΩ voltage divider to 3.3V** |
-| **Limit Switch** | KW11-3Z Switch | Pin 11 | **GPIO 17** | Active LOW, internal `PUD_UP` enabled |
+| **Ultrasonic ECHO** | HC-SR04 | Pin 18 | **GPIO 24** | **Requires 1kΩ / 2kΩ (or 10k/20k) voltage divider to 3.3V** |
 | **Stepper IN1** | ULN2003 Driver | Pin 29 | **GPIO 5** | Half-step phase 1 |
 | **Stepper IN2** | ULN2003 Driver | Pin 31 | **GPIO 6** | Half-step phase 2 |
 | **Stepper IN3** | ULN2003 Driver | Pin 33 | **GPIO 13** | Half-step phase 3 |
@@ -80,12 +76,7 @@ allow_anonymous true
 EOF'
    sudo systemctl restart mosquitto
    ```
-4. Verify I2C device detection:
-   ```bash
-   i2cdetect -y 1
-   # You should see address 23 (BH1750)
-   ```
-5. Install Python dependencies:
+4. Install Python dependencies:
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate
