@@ -27,6 +27,7 @@ QueueHandle_t soundQueue;
 QueueHandle_t ldrQueue;
 QueueHandle_t ackQueue;
 EventGroupHandle_t mqttEvents;
+SemaphoreHandle_t adcMutex;
 
 constexpr EventBits_t kConnected = BIT0;
 constexpr char kTopic[] = "smart_workstation/node2";
@@ -65,14 +66,17 @@ void vTaskSoundSample(void *) {
 
   for (;;) {
     uint16_t low = 4095, high = 0;
-    const uint32_t start = micros();
-    do {
-      const uint16_t sample = analogRead(kSoundPin);
-      lastSample = sample;
-      if (sample < low) low = sample;
-      if (sample > high) high = sample;
-      delayMicroseconds(100);
-    } while (static_cast<uint32_t>(micros() - start) < kWindowUs);
+    if (xSemaphoreTake(adcMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+      const uint32_t start = micros();
+      do {
+        const uint16_t sample = analogRead(kSoundPin);
+        lastSample = sample;
+        if (sample < low) low = sample;
+        if (sample > high) high = sample;
+        delayMicroseconds(100);
+      } while (static_cast<uint32_t>(micros() - start) < kWindowUs);
+      xSemaphoreGive(adcMutex);
+    }
 
     const float amplitude = high > low ? static_cast<float>(high - low) : 0.0f;
 
@@ -100,7 +104,7 @@ void vTaskSoundSample(void *) {
 
     Reading reading{peakDb, peakAmp, lastSample, millis()};
     xQueueOverwrite(soundQueue, &reading);
-    vTaskDelay(1);
+    vTaskDelay(pdMS_TO_TICKS(50)); // Yield ADC and CPU to other tasks between 50ms windows
   }
 }
 
@@ -133,7 +137,11 @@ void vTaskLdrSample(void *) {
   TickType_t lastWake = xTaskGetTickCount();
 
   for (;;) {
-    const uint16_t raw = analogRead(kLdrPin);
+    uint16_t raw = 0;
+    if (xSemaphoreTake(adcMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+      raw = analogRead(kLdrPin);
+      xSemaphoreGive(adcMutex);
+    }
     buffer[idx] = raw;
     idx = (idx + 1) % kFilterSize;
     if (idx == 0) filled = true;
@@ -302,8 +310,9 @@ void setup() {
   ldrQueue   = xQueueCreate(1, sizeof(Reading));
   ackQueue   = xQueueCreate(1, sizeof(int));
   mqttEvents = xEventGroupCreate();
+  adcMutex   = xSemaphoreCreateMutex();
 
-  if (!soundQueue || !ldrQueue || !ackQueue || !mqttEvents) abort();
+  if (!soundQueue || !ldrQueue || !ackQueue || !mqttEvents || !adcMutex) abort();
 
   // E1 Multitasking: 3 distinct FreeRTOS tasks with reasoned priorities
   // Task 1: Sound sampling (Priority 3, core 1 - high frequency 50ms window)
