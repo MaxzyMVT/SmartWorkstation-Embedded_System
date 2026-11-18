@@ -15,6 +15,7 @@ Hardware Specifications (Physical BOM):
 from __future__ import annotations
 
 import abc
+import glob
 import logging
 import os
 import random
@@ -63,7 +64,10 @@ class PinConfig:
     # Hardware calibration: compensates for transducer ringing blind zone and frame bezel
     DISTANCE_OFFSET_CM: float = float(os.getenv("DISTANCE_OFFSET_CM", "5.5"))
 
-    # 2. KY-018 LDR Photoresistor Module
+    # 2. KY-001 DS18B20 1-Wire Temperature Sensor
+    DS18B20_PIN: int = int(os.getenv("DS18B20_PIN", "4"))  # Pin 7 (Standard Linux 1-Wire GPIO)
+
+    # 3. Optional local KY-018 LDR (fallback)
     LDR_PIN: int = int(os.getenv("LDR_PIN", "27"))  # Pin 13
 
     # 3. 28BYJ-48 Stepper Motor via ULN2003
@@ -97,6 +101,11 @@ class BaseHardware(abc.ABC):
     @abc.abstractmethod
     def read_distance_cm(self) -> float:
         """Measures distance to user in cm via HC-SR04 ultrasonic sensor."""
+        ...
+
+    @abc.abstractmethod
+    def read_temp_c(self) -> Optional[float]:
+        """Reads ambient temperature in °C via KY-001 DS18B20 1-Wire digital sensor."""
         ...
 
     @abc.abstractmethod
@@ -158,6 +167,9 @@ class MockHardware(BaseHardware):
     def read_distance_cm(self) -> float:
         # Normal reading distance: 38.0 to 45.0 cm with small jitter
         return round(42.0 + random.uniform(-1.0, 1.0), 1)
+
+    def read_temp_c(self) -> Optional[float]:
+        return round(24.5 + random.uniform(-0.2, 0.2), 1)
 
     def read_lux(self) -> float:
         with self._lock:
@@ -288,6 +300,23 @@ class RPiHardware(BaseHardware):
 
             # Speed of sound is 343 m/s = 34300 cm/s
             return (pulse_duration * 34300.0) / 2.0
+
+    def read_temp_c(self) -> Optional[float]:
+        """Reads ambient temperature from KY-001 DS18B20 via Linux 1-Wire interface."""
+        try:
+            w1_devices = glob.glob("/sys/bus/w1/devices/28-*/w1_slave")
+            if not w1_devices:
+                return None
+            with open(w1_devices[0], "r") as f:
+                content = f.read()
+            if "YES" in content:
+                pos = content.find("t=")
+                if pos != -1:
+                    raw_c = float(content[pos + 2:].split()[0])
+                    return round(raw_c / 1000.0, 1)
+        except Exception as e:
+            logger.debug("DS18B20 1-Wire read error: %s", e)
+        return None
 
     def read_lux(self) -> float:
         """Reads ambient lighting intensity via KY-018 LDR module.

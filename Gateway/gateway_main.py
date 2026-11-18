@@ -130,6 +130,7 @@ class NodeRegistry:
         self.battery_mv: Optional[float] = None
         self.temp: Optional[float] = None
         self.sound: Optional[float] = None
+        self.lux: Optional[float] = None
 
     def ingest(self, topic: str, raw: bytes | str) -> bool:
         node = "node1" if topic.endswith("/node1") else "node2" if topic.endswith("/node2") else None
@@ -170,10 +171,13 @@ class NodeRegistry:
             else:
                 t = _to_float(msg.get("temp_c", msg.get("temp")), -20, 80)
                 s = _to_float(msg.get("sound_db", msg.get("sound")), 0, 140)
+                lx = _to_float(msg.get("lux", msg.get("light")), 0, 10000)
                 if t is not None:
                     self.temp = t
                 if s is not None:
                     self.sound = s
+                if lx is not None:
+                    self.lux = lx
 
             self._rx_time[node] = time.monotonic()
             self.stats[node]["rx"] += 1
@@ -191,6 +195,7 @@ class NodeRegistry:
                 "sitting_min": self.sitting_min if (node1_live and seat) else None,
                 "temp": self.temp if self.temp is not None else DEFAULT_TEMP_C,
                 "sound": self.sound if self.sound is not None else DEFAULT_SOUND_DB,
+                "lux": self.lux,
                 "node_status": {
                     "node1": "ONLINE" if node1_live else ("ASLEEP_OR_OFFLINE" if age1 is not None else "NEVER_SEEN"),
                     "node2": ("NEVER_SEEN" if age2 is None else "ONLINE" if age2 <= self.NODE2_HOLD_S else "STALE"),
@@ -701,12 +706,20 @@ class Gateway:
 
     def _cycle(self) -> None:
         snap = self.registry.snapshot()
-        distance, lux = self._read_local()
+        distance, fallback_lux = self._read_local()
+        local_temp = self.hw.read_temp_c()
+
+        # Temperature: local DS18B20 1-Wire on RPi (GPIO 4), fall back to Node 2 or default
+        raw_tmp = local_temp if local_temp is not None else snap["temp"]
+
+        # Lux: high-resolution ADC lux from Node 2 (ESP32 GPIO 34), fall back to local RPi lux
+        lux = snap["lux"] if snap.get("lux") is not None else fallback_lux
+        self._last_lux = lux
+
         sitting = self._sitting_minutes(snap)
 
         # Anti-spike temporal smoothing on Sound and Temp (EMA filter, alpha=0.25)
         raw_snd = snap["sound"]
-        raw_tmp = snap["temp"]
         if not hasattr(self, "_sound_ema") or self._sound_ema is None:
             self._sound_ema = raw_snd
             self._temp_ema = raw_tmp
@@ -773,8 +786,8 @@ class Gateway:
             "seat": snap["seat"],
             "distance": round(distance, 1),
             "light": round(lux, 1),
-            "temp": round(snap["temp"], 1),
-            "sound": round(snap["sound"], 1),
+            "temp": round(self._temp_ema, 1),
+            "sound": round(self._sound_ema, 1),
             "sitting_duration_min": round(sitting, 1),
             "curtain_state": self.curtain.state,
             "led_duty_cycle": round(self.led_duty, 1),
@@ -795,7 +808,7 @@ class Gateway:
 
         log.info("seat=%d dist=%5.1fcm lux=%6.1f T=%4.1fC snd=%4.1fdB sit=%5.1fm -> %-16s (%.2f, %.2fms) "
                  "| LED %3.0f%% curtain %-7s servo %3.0f | n1=%s n2=%s",
-                 snap["seat"], distance, lux, snap["temp"], snap["sound"], sitting,
+                 snap["seat"], distance, lux, self._temp_ema, self._sound_ema, sitting,
                  ai["class_name"], ai["confidence"], ai["latency_ms"],
                  self.led_duty, self.curtain.state, self.servo_angle,
                  snap["node_status"]["node1"], snap["node_status"]["node2"])

@@ -31,7 +31,7 @@ This component serves as the central intelligent edge controller for the Smart W
 
 | Peripheral | Component | Physical Pin | BCM GPIO | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **Light Sensor** | KY-018 LDR Module | Pin 13 | **GPIO 27** | Active LOW, 3.3V power |
+| **Temp Sensor** | KY-001 DS18B20 Module | Pin 7 | **GPIO 4** | 1-Wire digital bus (3.3V power, Pin 1) |
 | **Ultrasonic TRIG** | HC-SR04 | Pin 16 | **GPIO 23** | 10µs trigger pulse output |
 | **Ultrasonic ECHO** | HC-SR04 | Pin 18 | **GPIO 24** | **Requires 1kΩ / 2kΩ (or 10k/20k) voltage divider to 3.3V** |
 | **Stepper IN1** | ULN2003 Driver | Pin 29 | **GPIO 5** | Half-step phase 1 |

@@ -70,15 +70,15 @@ pio device monitor -b 115200  # Monitor serial logs
 
 ### 3.1 Hardware Connections
 - **Board**: ESP32 DOIT DevKit V1
-- **Temperature Sensor**: KY-001 DS18B20 OneWire on **GPIO 4** (with 4.7kΩ pull-up).
-- **Sound Sensor**: KY-037 Sound Sensor Analog OUT connected to ADC1 pin **GPIO 35** (Peak-to-Peak sampling window).
+- **Sound Sensor**: KY-037 Sound Sensor Analog OUT connected to ADC1 pin **GPIO 35** (50ms Peak-to-Peak sampling window).
+- **Light Sensor**: KY-018 LDR Photoresistor Module connected to ADC1 pin **GPIO 34** (12-bit Analog Lux reading: 0–4095).
 - **Power**: Micro-USB 5V power from workstation rail.
 
 ### 3.2 Mandatory Embedded Engineering Items (Rubric Depth)
 - **E1 (RTOS Multitasking)**:
-  1. `vTaskSoundSample` (Priority 3, high frequency): Continuous 50ms windowed ADC sampling for acoustic amplitude / dBA estimation.
-  2. `vTaskTempSample` (Priority 1, slow): Reads temperature once every 2–5 seconds.
-  3. `vTaskMqttDispatch` (Priority 2): Enqueues telemetry and publishes to Gateway over MQTT.
+  1. `vTaskSoundSample` (Priority 3, core 1): Continuous 50ms windowed ADC sampling for acoustic amplitude / dBA estimation.
+  2. `vTaskLdrSample` (Priority 1, core 0): Moving average ADC sampling for continuous Lux calculation (10 Hz).
+  3. `vTaskMqttDispatch` (Priority 2, core 0): Enqueues telemetry and publishes to Gateway over MQTT.
 - **E4 (Reliable Comm)**: Sequence counter + local buffer queue in RAM if MQTT broker disconnects.
 
 ### 3.3 MQTT Telemetry Output
@@ -87,20 +87,11 @@ pio device monitor -b 115200  # Monitor serial logs
   ```json
   {
     "node_id": "node2",
-    "temp_c": 24.8,
+    "lux": 485.0,
     "sound_db": 42.5,
     "seq": 204
   }
   ```
-  *(Note: Keys `"temp"` and `"sound"` are accepted as fallbacks by Gateway).*
-
-### 3.4 Agent Build & Test Commands
-```bash
-cd SensorNodes/Node2
-pio run                  # Compile firmware
-pio run -t upload        # Flash to ESP32
-pio device monitor -b 115200
-```
 
 ---
 
@@ -111,7 +102,7 @@ The Gateway is the central brain running on a **Raspberry Pi 4 Model B** (or any
 ### 4.1 Raspberry Pi 4 GPIO Pinout (BCM Numbering)
 | Peripheral | Pin (BCM) | Physical Header Pin | Electrical Requirements |
 | :--- | :--- | :--- | :--- |
-| **Light Sensor (KY-018 LDR Module)** | **GPIO 27** | Pin 13 | 3.3V power, active LOW |
+| **KY-001 DS18B20 Temp Sensor** | **GPIO 4** | Pin 7 | 3.3V power, 1-Wire digital bus (KY-001 has onboard pull-up) |
 | **HC-SR04 TRIG** | **GPIO 23** | Pin 16 | 3.3V Output pulse (10µs) |
 | **HC-SR04 ECHO** | **GPIO 24** | Pin 18 | **5V Input $\rightarrow$ 1kΩ / 2kΩ (or 10k/20k) divider to 3.3V** |
 | **28BYJ-48 Stepper IN1–IN4** | **GPIO 5, 6, 13, 19** | Pins 29, 31, 33, 35 | ULN2003 driver powered by 5V external rail |
