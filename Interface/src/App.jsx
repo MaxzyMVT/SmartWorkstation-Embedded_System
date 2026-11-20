@@ -348,7 +348,7 @@ export default function App() {
               <span className="text-xs font-semibold text-slate-400 ml-1">Lux</span>
             </div>
             <span className="text-xs text-slate-400 font-medium mt-1">
-              KY-018 LDR Photoresistor (Node 2 GPIO 34)
+              BH1750 Ambient Light Sensor (Node 2 I2C GPIO 21/22)
             </span>
           </div>
 
