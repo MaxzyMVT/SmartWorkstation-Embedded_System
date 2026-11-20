@@ -3,11 +3,11 @@ Smart Workstation - Raspberry Pi Hardware Interface Layer
 Course: 2110356 Embedded System (CEDT), Chulalongkorn University
 
 Hardware Specifications (Physical BOM):
-- Local Sensors (Mandatory Requirement M1):
+- Local Gateway Sensors (Mandatory Requirement M1):
     1. HC-SR04 Ultrasonic Distance Sensor (Posture distance on GPIO 23 TRIG / GPIO 24 ECHO)
-    2. KY-018 LDR Photoresistor Module (Ambient reading surface lighting on GPIO 27)
-    (Remote Sensors: Node 1 FSR402 Seat Mat | Node 2 KY-037 Sound & KY-001 DS18B20 Temp)
-- Local Actuators (Mandatory Requirement M2):
+    2. KY-001 DS18B20 1-Wire Digital Temperature Sensor (Ambient temperature on GPIO 4)
+    (Remote Sensors: Node 1 FSR402 Seat Mat | Node 2 KY-037 Sound & BH1750 Ambient Light I2C)
+- Local Gateway Actuators (Mandatory Requirement M2):
     1. 28BYJ-48 Stepper Motor + ULN2003 (Curtain on GPIO 5, 6, 13, 19; software M7 safety bounds)
     2. Dynamic LED Desk Lamp (Hardware PWM0 on GPIO 18 via N-Channel MOSFET)
 """
@@ -67,7 +67,7 @@ class PinConfig:
     # 2. KY-001 DS18B20 1-Wire Temperature Sensor
     DS18B20_PIN: int = int(os.getenv("DS18B20_PIN", "4"))  # Pin 7 (Standard Linux 1-Wire GPIO)
 
-    # 3. Optional local KY-018 LDR (fallback)
+    # 3. Optional local Light Sensor (fallback)
     LDR_PIN: int = int(os.getenv("LDR_PIN", "27"))  # Pin 13
 
     # 3. 28BYJ-48 Stepper Motor via ULN2003
@@ -110,7 +110,7 @@ class BaseHardware(abc.ABC):
 
     @abc.abstractmethod
     def read_lux(self) -> float:
-        """Reads ambient lighting intensity in Lux via KY-018 LDR sensor."""
+        """Reads ambient lighting intensity in Lux (fallback if Node 2 BH1750 unavailable)."""
         ...
 
     @abc.abstractmethod
@@ -227,8 +227,8 @@ class RPiHardware(BaseHardware):
 
         self._init_gpio()
         logger.info(
-            "Physical RPiHardware initialized (HC-SR04 on GPIO %d/%d, KY-018 on GPIO %d, Stepper on GPIO 5,6,13,19, LED PWM on GPIO %d).",
-            self.pins.ULTRASONIC_TRIG, self.pins.ULTRASONIC_ECHO, self.pins.LDR_PIN, self.pins.LED_PWM_PIN
+            "Physical RPiHardware initialized (HC-SR04 on GPIO %d/%d, DS18B20 on GPIO %d, Stepper on GPIO 5,6,13,19, LED PWM on GPIO %d).",
+            self.pins.ULTRASONIC_TRIG, self.pins.ULTRASONIC_ECHO, self.pins.DS18B20_PIN, self.pins.LED_PWM_PIN
         )
 
     @property
@@ -243,7 +243,7 @@ class RPiHardware(BaseHardware):
         GPIO.setup(self.pins.ULTRASONIC_TRIG, GPIO.OUT, initial=GPIO.LOW)
         GPIO.setup(self.pins.ULTRASONIC_ECHO, GPIO.IN)
 
-        # 2. KY-018 LDR Photoresistor Module
+        # 2. Fallback Light Sensor (Active LOW)
         if self.pins.LDR_PIN >= 0:
             GPIO.setup(self.pins.LDR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
@@ -319,7 +319,7 @@ class RPiHardware(BaseHardware):
         return None
 
     def read_lux(self) -> float:
-        """Reads ambient lighting intensity via KY-018 LDR module.
+        """Reads ambient lighting intensity in Lux (fallback if Node 2 BH1750 unavailable).
         Active LOW:
           - GPIO.LOW (0)  -> Light sufficient (~480.0 Lux nominal, OPTIMAL_STUDY)
           - GPIO.HIGH (1) -> Dark / covered / shaded (~180.0 Lux base, LOW_LIGHT)

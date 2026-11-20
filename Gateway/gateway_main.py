@@ -3,12 +3,12 @@
 
 Pipeline, once per second (AGENTS.md sections 4.2 / 4.5):
     MQTT node1 + node2  --\
-    HC-SR04 + KY-018    ---+--> feature vector --> SmartWorkstationAI (model.joblib, <10 ms)
+    HC-SR04 + DS18B20   ---+--> feature vector --> SmartWorkstationAI (model.joblib, <10 ms)
                                    --> actuators (28BYJ-48 stepper curtain, PWM LED bar)
                                    --> smart_workstation/telemetry (MQTT, 1 Hz)
                                    --> SQLite outbox --> Firestore (M5)   |  Discord / LINE alerts (M6)
 
-Closed loop: actuators change the room, the next KY-018/HC-SR04 reading sees the
+Closed loop: actuators change the room, the next BH1750/HC-SR04 reading sees the
 change, and the model decides again. Actuator decisions come from the model's class,
 never from raw-sensor if/else (rubric M4).
 
@@ -171,7 +171,7 @@ class NodeRegistry:
             else:
                 t = _to_float(msg.get("temp_c", msg.get("temp")), -20, 80)
                 s = _to_float(msg.get("sound_db", msg.get("sound")), 0, 140)
-                lx = _to_float(msg.get("lux", msg.get("light")), 0, 10000)
+                lx = _to_float(msg.get("lux", msg.get("light")), 0, 65535)
                 if t is not None:
                     self.temp = t
                 if s is not None:
@@ -712,7 +712,7 @@ class Gateway:
         # Temperature: local DS18B20 1-Wire on RPi (GPIO 4), fall back to Node 2 or default
         raw_tmp = local_temp if local_temp is not None else snap["temp"]
 
-        # Lux: high-resolution ADC lux from Node 2 (ESP32 GPIO 34), fall back to local RPi lux
+        # Lux: digital I2C lux from Node 2 (BH1750 on ESP32 GPIO 21/22), fall back to local RPi lux
         lux = snap["lux"] if snap.get("lux") is not None else fallback_lux
         self._last_lux = lux
 

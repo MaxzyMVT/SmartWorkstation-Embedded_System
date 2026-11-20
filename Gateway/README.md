@@ -10,9 +10,10 @@
 
 This component serves as the central intelligent edge controller for the Smart Workstation:
 
-- **Requirement M1 (≥2 Local Wired Sensors)**:
+- **Requirement M1 (≥2 Local Wired Sensors on Gateway)**:
   1. **HC-SR04 Ultrasonic Distance Sensor**: Measures face-to-book distance angled at 45° from the workstation front arch (GPIO 23 TRIG, GPIO 24 ECHO).
-  2. **KY-018 LDR Photoresistor Module**: Measures ambient reading surface illumination directly on the desk (GPIO 27).
+  2. **KY-001 DS18B20 1-Wire Digital Temperature Sensor**: Measures ambient workstation temperature directly (GPIO 4 1-Wire bus).
+  *(Node 2 provides KY-037 Sound and BH1750 Ambient Light via I2C; Node 1 provides FSR402 Seat Mat)*
 - **Requirement M2 (Closed-Loop Physical Actuators)**:
   1. **Motorized Blocker Curtain (28BYJ-48 Stepper + ULN2003)**: Half-step driven barrier that rolls down when poor posture, severe noise, or eye strain is detected, with M7 software bounds.
   2. **High-CRI 5V LED Bar**: Driven via logic-level MOSFET using closed-loop PWM (proportional controller maintaining optimal study lighting).
