@@ -13,8 +13,8 @@
 
 ### Closed-Loop Architecture
 1. **Sensor Node 1 (Chair)**: ESP32 + FSR402 Force Sensing Resistor (seat pressure mat). Detects seating presence, monitors cumulative study time, and features deep sleep with GPIO 33 interrupt wake-up.
-2. **Sensor Node 2 (Enclosure Wall)**: ESP32 + KY-001 DS18B20 1-Wire temperature sensor + KY-037 sound detection sensor. Monitors acoustic noise and thermal comfort.
-3. **Gateway (Front Arch / Roof)**: Raspberry Pi 4 + HC-SR04 ultrasonic distance sensor + KY-018 LDR photoresistor module.
+2. **Sensor Node 2 (Desk Surface)**: ESP32 + KY-037 sound sensor + BH1750 digital ambient light sensor (I2C). Monitors acoustic noise and precise desk illumination (1–65535 Lux).
+3. **Gateway (Front Arch / Desk)**: Raspberry Pi 4 + HC-SR04 ultrasonic distance sensor + KY-001 DS18B20 1-Wire temperature sensor.
 4. **Actuators (Closed-Loop)**:
    - **Motorized Blocker Curtain**: 28BYJ-48 Stepper motor + ULN2003 driver with M7 software bounds. Automatically lowers to enforce break time or shield against severe noise / drafts; opens when normal conditions resume.
    - **Adaptive Task Lighting**: High-CRI 5V LED lamp driven by PWM MOSFET (proportional feedback maintaining optimal desk illumination).
@@ -35,7 +35,7 @@ Total: 70 Points = I (5) + II (5) + II′ (10) + III (20) + IV (10) + V (10) + V
 
 | Code | Requirement | Course Definition & Strict Rules | Smart Workstation Implementation Status |
 | :--- | :--- | :--- | :--- |
-| **M1** | $\ge 5$ distinct sensor types ($\ge 2$ on Node, $\ge 2$ on Gateway) | Buttons/switches do **not** count. Internal MCU sensors do **not** count. Dual-reading modules count as **1** type. Off-the-shelf devices do not count. | **Pass (5 types total)**:<br>• **Gateway (2)**: HC-SR04 Ultrasonic, KY-018 LDR Module<br>• **Node 1 (1)**: FSR402 Force Sensing Resistor<br>• **Node 2 (2)**: KY-001 DS18B20 Temp, KY-037 Sound Sensor |
+| **M1** | $\ge 5$ distinct sensor types ($\ge 2$ on Node, $\ge 2$ on Gateway) | Buttons/switches do **not** count. Internal MCU sensors do **not** count. Dual-reading modules count as **1** type. Off-the-shelf devices do not count. | **Pass (5 types total)**:<br>• **Gateway (2)**: HC-SR04 Ultrasonic, KY-001 DS18B20 Temp<br>• **Node 1 (1)**: FSR402 Force Sensing Resistor<br>• **Node 2 (2)**: BH1750 Ambient Light (I2C), KY-037 Sound Sensor |
 | **M2** | $\ge 1$ physical actuator in closed loop | LEDs, buzzers, speakers, displays do **not** count as actuators. Vibration motors count only if doing mechanical work. Must produce physical motion. | **Pass (Physical Actuator)**:<br>• 28BYJ-48 Stepper Motor (rolls curtain up/down via ULN2003)<br>• (Supplementary Dynamic PWM LED lamp via MOSFET) |
 | **M3** | Wired or wireless node-to-gateway transmission | Must transmit from sensor nodes to gateway (nodes do **not** connect directly to cloud). | **Pass**: Wi-Fi MQTT with structured JSON telemetry payload (`node_id`, sequence, sensor payload). |
 | **M4** | AI component in closed loop | Must process camera/mic/sensor data and drive actuator decisions. **Fixed thresholds and if-else rules are strictly prohibited.** | **Pass**: On-device 9-class Random Forest classifier taking 6 sensor features and predicting workstation state to actuate curtain. |
@@ -96,7 +96,7 @@ We target 5 designated items:
 - **Quantitative Metrics (4 pts)**: Must measure at least **3 metrics** with real data and stated methodology (3 pts), **plus repeated trials reporting mean, min, max, and variance** (1 pt).
   1. **End-to-End Latency**: Time elapsed from sensor trigger (e.g., sitting down / leaning forward) to physical curtain actuation and web dashboard update ($N \ge 30$ trials).
   2. **Packet Delivery Rate (PDR)**: Percentage of wireless packets successfully received between ESP32 nodes and Gateway under varying distances and obstacles ($N \ge 1000$ packets).
-  3. **Sensor Accuracy Validation**: KY-018 LDR readings compared against ambient light levels; KY-001 Temperature readings compared against a laboratory thermometer; KY-037 Sound readings compared against a sound level meter.
+  3. **Sensor Accuracy Validation**: BH1750 Light readings compared against ambient light levels (lux meter); KY-001 Temperature readings compared against a laboratory thermometer; KY-037 Sound readings compared against a sound level meter.
   4. **Power Consumption & Battery Life**: Current draw measured across Active, IDLE, and Deep Sleep states on Node 1, calculating expected runtime on a standard battery.
   5. **AI Inference & Accuracy**: Confusion matrix, Precision, Recall, F1-Score, and inference latency distribution ($<10\text{ ms}$).
 - **Analysis & Comparison (3 pts)**: Compare measured metrics against project goals AND existing commercial smart desk/ergonomic devices.

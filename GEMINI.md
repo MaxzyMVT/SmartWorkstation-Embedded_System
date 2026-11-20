@@ -110,7 +110,7 @@ npm run build
 
 When writing code, you must never violate these project constraints:
 
-1. **Sensors (M1)**: Buttons and switches are **NOT** environmental sensors. Do not count limit switches or seat switches toward the 5 sensor types. True sensors are: Ultrasonic (HC-SR04), Light (KY-018 LDR), Pressure (FSR402 Force Sensing Resistor), Temperature (KY-001 DS18B20), Sound (KY-037 Mic).
+1. **Sensors (M1)**: Buttons and switches are **NOT** environmental sensors. Do not count limit switches or seat switches toward the 5 sensor types. True sensors are: Ultrasonic (HC-SR04), Light (BH1750 Digital Lux), Pressure (FSR402 Force Sensing Resistor), Temperature (KY-001 DS18B20), Sound (KY-037 Mic).
 2. **Actuators (M2)**: LEDs and buzzers are **NOT** actuators. Actuators are physical motion devices: 28BYJ-48 Stepper Motor and SG90 Servo Motor.
 3. **AI Logic (M4)**: Fixed thresholds or if-else ladders do **NOT** count as AI. Closed-loop control must be driven by the trained `RandomForestClassifier` pipeline (`model.joblib`).
 4. **Depth Items (E1–E5)**:

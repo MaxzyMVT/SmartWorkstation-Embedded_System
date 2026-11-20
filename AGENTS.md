@@ -13,15 +13,15 @@
   ESP32 + FSR Seat Mat       \ (MQTT / Wi-Fi)
                               +---> [ Gateway (Raspberry Pi 4) ] ---> [ Cloud / Firebase ]
 [ Sensor Node 2 (Desk) ]   --/       - Direct Wired Sensors            - React Web Dashboard
-  ESP32 + Temp & Sound               - On-Device Scikit-Learn AI       - Discord & LINE Alerts
+  ESP32 + Sound & BH1750 Light       - On-Device Scikit-Learn AI       - Discord & LINE Alerts
                                      - Stepper Curtain & LED PWM
 ```
 
 | Subsystem | Folder | Target Hardware | Primary Agent Responsibilities |
 | :--- | :--- | :--- | :--- |
 | **Node 1** | `SensorNodes/Node1/` | ESP32 DevKit V1 | Chair seat detection via FSR402 Force Sensing Resistor, FreeRTOS tasks (E1), GPIO ISR (E2), deep sleep & power budget (E3), packet retries (E4). |
-| **Node 2** | `SensorNodes/Node2/` | ESP32 DevKit V1 | Ambient temperature via KY-001 DS18B20, acoustic noise sampling via KY-037, FreeRTOS scheduling (E1), packet retries (E4). |
-| **Gateway** | `Gateway/` | Raspberry Pi 4 (or PC Mock) | Ingest node MQTT telemetry, sample local sensors (HC-SR04 ultrasonic, KY-018 LDR), run AI classification (M4), drive actuators (28BYJ-48 stepper curtain, dynamic LED PWM), forward cloud telemetry (M5), dispatch alerts (M6). |
+| **Node 2** | `SensorNodes/Node2/` | ESP32 DevKit V1 | Ambient acoustic noise sampling via KY-037, ambient lux via BH1750 I2C (GPIO 21/22), FreeRTOS scheduling (E1), packet retries (E4). |
+| **Gateway** | `Gateway/` | Raspberry Pi 4 (or PC Mock) | Ingest node MQTT telemetry, sample local sensors (HC-SR04 ultrasonic, KY-001 DS18B20 temp), run AI classification (M4), drive actuators (28BYJ-48 stepper curtain, dynamic LED PWM), forward cloud telemetry (M5), dispatch alerts (M6). |
 | **Interface**| `Interface/` | React 18 + Vite | Display real-time telemetry, session timers, and closed-loop actuator feedback. |
 
 ---
@@ -71,13 +71,13 @@ pio device monitor -b 115200  # Monitor serial logs
 ### 3.1 Hardware Connections
 - **Board**: ESP32 DOIT DevKit V1
 - **Sound Sensor**: KY-037 Sound Sensor Analog OUT connected to ADC1 pin **GPIO 35** (50ms Peak-to-Peak sampling window).
-- **Light Sensor**: KY-018 LDR Photoresistor Module connected to ADC1 pin **GPIO 34** (12-bit Analog Lux reading: 0–4095).
+- **Light Sensor**: BH1750 Digital Ambient Light Sensor connected via I2C (SDA **GPIO 21**, SCL **GPIO 22**, 3.3V, 16-bit digital Lux 1–65535).
 - **Power**: Micro-USB 5V power from workstation rail.
 
 ### 3.2 Mandatory Embedded Engineering Items (Rubric Depth)
 - **E1 (RTOS Multitasking)**:
   1. `vTaskSoundSample` (Priority 3, core 1): Continuous 50ms windowed ADC sampling for acoustic amplitude / dBA estimation.
-  2. `vTaskLdrSample` (Priority 1, core 0): Moving average ADC sampling for continuous Lux calculation (10 Hz).
+  2. `vTaskLightSample` (Priority 1, core 0): Continuous BH1750 digital I2C Lux sampling (~6.6 Hz).
   3. `vTaskMqttDispatch` (Priority 2, core 0): Enqueues telemetry and publishes to Gateway over MQTT.
 - **E4 (Reliable Comm)**: Sequence counter + local buffer queue in RAM if MQTT broker disconnects.
 
@@ -195,7 +195,7 @@ The Gateway publishes consolidated JSON every 1 second to:
 
 ## 6. Critical Course Rubric Rules for All Agents
 
-1. **Buttons & switches are NOT sensors (M1)**: Do not count the limit switch or seat switch as an environment sensor. Our 5 true sensors are: Ultrasonic (HC-SR04), Light (KY-018 LDR), Pressure (FSR402 Force Sensing Resistor), Temperature (KY-001 DS18B20), Sound (KY-037 Mic).
+1. **Buttons & switches are NOT sensors (M1)**: Do not count the limit switch or seat switch as an environment sensor. Our 5 true sensors are: Ultrasonic (HC-SR04), Light (BH1750 Digital Lux), Pressure (FSR402 Force Sensing Resistor), Temperature (KY-001 DS18B20), Sound (KY-037 Mic).
 2. **LEDs & buzzers are NOT actuators (M2)**: The mechanical actuator is the 28BYJ-48 stepper motor (smart curtain). Supplementary dynamic task lighting is controlled via MOSFET PWM.
 3. **Safety Stop for Actuators (M7)**: Moving parts must have a way to stop safely. Satisfied by software travel limits (0 to 4096 steps = 0% to 100%), stepper watchdog timeout, ULN2003 coil de-energizing on idle, and emergency stop command.
 4. **If-Else rules are NOT AI (M4)**: Actuator triggering must be mediated by the trained 9-class model in `model.joblib`.
