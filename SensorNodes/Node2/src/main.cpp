@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <Wire.h>
 #include <mqtt_client.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
@@ -10,9 +11,17 @@
 #include "node2_config.h"
 
 namespace {
-// Pin Configuration: Both pins are on ADC1 to allow uninterrupted analog reads during Wi-Fi operation
-constexpr uint8_t kSoundPin = 35; // KY-037 Sound Sensor Analog OUT (ADC1 Channel 7)
-constexpr uint8_t kLdrPin   = 34; // KY-018 LDR Photoresistor Signal (ADC1 Channel 6)
+// ----------------------------------------------------------------------------
+// Pin Configuration
+// ----------------------------------------------------------------------------
+// 1. KY-037 Sound Sensor: Analog OUT on ADC1 (works concurrently with Wi-Fi)
+constexpr uint8_t kSoundPin = 35; // ADC1 Channel 7
+
+// 2. BH1750 Ambient Light Sensor (I2C Digital Bus)
+constexpr uint8_t kSdaPin = 21;   // I2C Data
+constexpr uint8_t kSclPin = 22;   // I2C Clock
+constexpr uint8_t kBh1750Addr = 0x23; // Default address (ADDR floating / GND)
+constexpr uint8_t kBh1750AltAddr = 0x5C; // Alternate address if ADDR tied to 3.3V
 
 constexpr uint32_t kWindowUs = 50000; // 50ms sound sample window
 
@@ -24,10 +33,9 @@ struct Reading {
 };
 
 QueueHandle_t soundQueue;
-QueueHandle_t ldrQueue;
+QueueHandle_t lightQueue;
 QueueHandle_t ackQueue;
 EventGroupHandle_t mqttEvents;
-SemaphoreHandle_t adcMutex;
 
 constexpr EventBits_t kConnected = BIT0;
 constexpr char kTopic[] = "smart_workstation/node2";
@@ -66,17 +74,14 @@ void vTaskSoundSample(void *) {
 
   for (;;) {
     uint16_t low = 4095, high = 0;
-    if (xSemaphoreTake(adcMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-      const uint32_t start = micros();
-      do {
-        const uint16_t sample = analogRead(kSoundPin);
-        lastSample = sample;
-        if (sample < low) low = sample;
-        if (sample > high) high = sample;
-        delayMicroseconds(100);
-      } while (static_cast<uint32_t>(micros() - start) < kWindowUs);
-      xSemaphoreGive(adcMutex);
-    }
+    const uint32_t start = micros();
+    do {
+      const uint16_t sample = analogRead(kSoundPin);
+      lastSample = sample;
+      if (sample < low) low = sample;
+      if (sample > high) high = sample;
+      delayMicroseconds(100);
+    } while (static_cast<uint32_t>(micros() - start) < kWindowUs);
 
     const float amplitude = high > low ? static_cast<float>(high - low) : 0.0f;
 
@@ -104,66 +109,67 @@ void vTaskSoundSample(void *) {
 
     Reading reading{peakDb, peakAmp, lastSample, millis()};
     xQueueOverwrite(soundQueue, &reading);
-    vTaskDelay(pdMS_TO_TICKS(50)); // Yield ADC and CPU to other tasks between 50ms windows
+    vTaskDelay(pdMS_TO_TICKS(50)); // Yield between 50ms windows
   }
 }
 
 // ----------------------------------------------------------------------------
-// KY-018 LDR Calibration (Continuous 12-bit Analog Lux Reading)
+// BH1750 Digital Ambient Light Sensor (I2C Bus: SDA=GPIO21, SCL=GPIO22)
 // ----------------------------------------------------------------------------
-float adcToLux(uint16_t adc) {
-  // Calibrated for KY-018 LDR on ESP32 ADC:
-  // With a 10k resistor from GPIO 34 to GND (5k effective pull-down):
-  // - Dark / Covered (adc <= 2200):   80 - 250 Lux (LOW_LIGHT < 300)
-  // - Room light     (adc 2600-3600): 420 - 580 Lux (OPTIMAL_STUDY 350-700)
-  // - Direct Glare   (adc >= 3900):   780 - 1500+ Lux (HARSH_GLARE > 750)
-  float lux;
-  if (adc <= 2200) {
-    lux = 80.0f + (static_cast<float>(adc) / 2200.0f) * 170.0f; // 80 - 250 Lux
-  } else if (adc < 3600) {
-    const float t = static_cast<float>(adc - 2200) / 1400.0f;
-    lux = 250.0f + t * 350.0f; // 250 - 600 Lux (Nominal ~480-520 at 3100)
-  } else {
-    const float t = (adc >= 4095) ? 1.0f : static_cast<float>(adc - 3600) / 495.0f;
-    lux = 600.0f + t * 900.0f; // 600 - 1500 Lux (Flashlight/sunlight triggers > 750)
+uint8_t activeBh1750Addr = kBh1750Addr;
+bool bh1750Ready = false;
+
+bool initBh1750() {
+  // Test default address 0x23, then fallback to 0x5C
+  for (uint8_t addr : {kBh1750Addr, kBh1750AltAddr}) {
+    Wire.beginTransmission(addr);
+    Wire.write(0x10); // Continuously H-Resolution Mode (1 Lux resolution, 120ms typ)
+    if (Wire.endTransmission() == 0) {
+      activeBh1750Addr = addr;
+      bh1750Ready = true;
+      Serial.printf("[Node2 I2C] BH1750 initialized successfully at 0x%02X!\n", addr);
+      return true;
+    }
   }
-  return roundf(lux * 10.0f) / 10.0f;
+  bh1750Ready = false;
+  return false;
 }
 
-void vTaskLdrSample(void *) {
-  analogReadResolution(12);
-  analogSetPinAttenuation(kLdrPin, ADC_11db);
+float readBh1750Lux(uint16_t &rawOut) {
+  if (!bh1750Ready) {
+    if (!initBh1750()) return -1.0f;
+  }
 
-  constexpr int kFilterSize = 8;
-  uint16_t buffer[kFilterSize] = {0};
-  int idx = 0;
-  bool filled = false;
+  Wire.requestFrom(activeBh1750Addr, (uint8_t)2);
+  if (Wire.available() >= 2) {
+    uint16_t raw = Wire.read();
+    raw <<= 8;
+    raw |= Wire.read();
+    rawOut = raw;
+    // Standard BH1750 optical transfer formula: Lux = raw / 1.2
+    float lux = static_cast<float>(raw) / 1.2f;
+    return roundf(lux * 10.0f) / 10.0f;
+  }
+  bh1750Ready = false; // Trigger re-init on next cycle if bus stalled
+  return -1.0f;
+}
 
-  vTaskDelay(pdMS_TO_TICKS(200));
+void vTaskLightSample(void *) {
+  Wire.begin(kSdaPin, kSclPin, 100000); // 100 kHz standard I2C
+  vTaskDelay(pdMS_TO_TICKS(200));       // Power-on settling
+  initBh1750();
+
   TickType_t lastWake = xTaskGetTickCount();
 
   for (;;) {
     uint16_t raw = 0;
-    if (xSemaphoreTake(adcMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-      raw = analogRead(kLdrPin);
-      xSemaphoreGive(adcMutex);
-    }
-    buffer[idx] = raw;
-    idx = (idx + 1) % kFilterSize;
-    if (idx == 0) filled = true;
+    float lux = readBh1750Lux(raw);
+    const bool valid = isfinite(lux) && lux >= 0.0f;
 
-    const int count = filled ? kFilterSize : idx;
-    uint32_t sum = 0;
-    for (int i = 0; i < count; ++i) {
-      sum += buffer[i];
-    }
-    const uint16_t avgAdc = sum / count;
-    const float lux = adcToLux(avgAdc);
+    Reading reading{valid ? lux : NAN, static_cast<float>(raw), raw, millis()};
+    xQueueOverwrite(lightQueue, &reading);
 
-    Reading reading{lux, static_cast<float>(raw), avgAdc, millis()};
-    xQueueOverwrite(ldrQueue, &reading);
-
-    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(100)); // Sample at 10 Hz
+    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(150)); // Sample every 150ms
   }
 }
 
@@ -214,15 +220,15 @@ void vTaskMqttDispatch(void *) {
     const uint32_t now = millis();
     if (now - lastSample >= 1000) {
       lastSample += 1000;
-      Reading sound{}, ldr{};
+      Reading sound{}, light{};
       const bool hasSound = (xQueuePeek(soundQueue, &sound, 0) == pdTRUE);
-      const bool hasLdr   = (xQueuePeek(ldrQueue, &ldr, 0) == pdTRUE);
+      const bool hasLight = (xQueuePeek(lightQueue, &light, 0) == pdTRUE);
 
-      char ldrStr[35];
-      if (hasLdr && isfinite(ldr.value)) {
-        snprintf(ldrStr, sizeof(ldrStr), "%.1f Lux (adc:%u)", ldr.value, ldr.dcSample);
+      char lightStr[35];
+      if (hasLight && isfinite(light.value)) {
+        snprintf(lightStr, sizeof(lightStr), "%.1f Lux (raw:%u)", light.value, light.dcSample);
       } else {
-        snprintf(ldrStr, sizeof(ldrStr), "WAITING");
+        snprintf(lightStr, sizeof(lightStr), "WAITING_I2C");
       }
 
       char soundStr[35];
@@ -235,16 +241,16 @@ void vTaskMqttDispatch(void *) {
       const bool wifiOk = (WiFi.status() == WL_CONNECTED);
       const bool mqttOk = (xEventGroupGetBits(mqttEvents) & kConnected) != 0;
 
-      Serial.printf("[Node2 Monitor] Lux: %-22s | Sound: %-20s | WiFi: %s | MQTT: %s | Queue: %u\n",
-                    ldrStr, soundStr,
+      Serial.printf("[Node2 Monitor] Light: %-22s | Sound: %-20s | WiFi: %s | MQTT: %s | Queue: %u\n",
+                    lightStr, soundStr,
                     wifiOk ? WiFi.localIP().toString().c_str() : "DISCONNECTED",
                     mqttOk ? "ONLINE" : "OFFLINE",
                     static_cast<unsigned>(backlog.size()));
 
-      if (hasSound && hasLdr &&
-          isfinite(ldr.value) && isfinite(sound.value) &&
-          millis() - ldr.sampledMs <= 3000 && millis() - sound.sampledMs <= 1500) {
-        const Telemetry packet{sound.value, ldr.value, ++seq};
+      if (hasSound && hasLight &&
+          isfinite(light.value) && isfinite(sound.value) &&
+          millis() - light.sampledMs <= 3000 && millis() - sound.sampledMs <= 1500) {
+        const Telemetry packet{sound.value, light.value, ++seq};
         while (backlog.size() >= 3) {
           if (backlog.front()) backlog.acknowledge(backlog.front()->seq);
         }
@@ -300,8 +306,9 @@ void setup() {
   delay(500);
   Serial.println("\n==========================================");
   Serial.println("  SmartWorkstation - Sensor Node 2 (Desk) ");
-  Serial.println("  GPIO 34: KY-018 LDR Photoresistor (ADC1)");
-  Serial.println("  GPIO 35: KY-037 Sound Sensor (ADC1)     ");
+  Serial.println("  I2C SDA: GPIO 21 (BH1750 Ambient Light) ");
+  Serial.println("  I2C SCL: GPIO 22 (BH1750 Ambient Light) ");
+  Serial.println("  ADC1 35: GPIO 35 (KY-037 Sound Sensor)  ");
   Serial.println("==========================================");
 
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
@@ -313,19 +320,18 @@ void setup() {
   });
 
   soundQueue = xQueueCreate(1, sizeof(Reading));
-  ldrQueue   = xQueueCreate(1, sizeof(Reading));
+  lightQueue = xQueueCreate(1, sizeof(Reading));
   ackQueue   = xQueueCreate(1, sizeof(int));
   mqttEvents = xEventGroupCreate();
-  adcMutex   = xSemaphoreCreateMutex();
 
-  if (!soundQueue || !ldrQueue || !ackQueue || !mqttEvents || !adcMutex) abort();
+  if (!soundQueue || !lightQueue || !ackQueue || !mqttEvents) abort();
 
   // E1 Multitasking: 3 distinct FreeRTOS tasks with reasoned priorities
   // Task 1: Sound sampling (Priority 3, core 1 - high frequency 50ms window)
-  // Task 2: LDR lux sampling (Priority 1, core 0 - 100ms sample period)
+  // Task 2: Light sampling (Priority 1, core 0 - 150ms BH1750 I2C sampling)
   // Task 3: MQTT dispatch (Priority 2, core 0 - 1s telemetry publishing)
   if (xTaskCreatePinnedToCore(vTaskSoundSample, "sound", 4096, nullptr, 3, nullptr, 1) != pdPASS ||
-      xTaskCreatePinnedToCore(vTaskLdrSample,   "ldr",   4096, nullptr, 1, nullptr, 0) != pdPASS ||
+      xTaskCreatePinnedToCore(vTaskLightSample, "light", 4096, nullptr, 1, nullptr, 0) != pdPASS ||
       xTaskCreatePinnedToCore(vTaskMqttDispatch,"mqtt",  6144, nullptr, 2, nullptr, 0) != pdPASS) abort();
 }
 
