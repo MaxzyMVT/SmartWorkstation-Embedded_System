@@ -224,6 +224,8 @@ class RPiHardware(BaseHardware):
         self._led_pwm = None
         self._lux_history: List[float] = []
         self._filtered_lux: float = 480.0
+        self._last_valid_distance: float = 45.0
+        self._consecutive_distance_fails: int = 0
 
         self._init_gpio()
         logger.info(
@@ -257,49 +259,62 @@ class RPiHardware(BaseHardware):
         self._led_pwm.start(0.0)
 
     def read_distance_cm(self) -> float:
-        # Collect 3 pings and use median to reject acoustic multipath spikes
+        # Collect up to 4 pings with 20ms transducer settling holdoff
         pings: List[float] = []
-        for _ in range(3):
+        for _ in range(4):
             val = self._single_ultrasonic_ping()
-            if val is not None and 1.0 <= val <= 250.0:
+            if val is not None and 2.0 <= val <= 250.0:
                 pings.append(val)
-            time.sleep(0.005)
+            time.sleep(0.020)  # 20ms transducer ultrasonic settling time
 
         if not pings:
-            return 999.0  # Out of range / sensor unplugged
+            self._consecutive_distance_fails += 1
+            # If momentary Linux preemption or acoustic timeout, hold last valid distance for up to 3 seconds
+            if self._consecutive_distance_fails <= 3 and self._last_valid_distance is not None:
+                return round(self._last_valid_distance, 1)
+            return 999.0  # Persistent unplugged / out-of-range
+
+        self._consecutive_distance_fails = 0
         pings.sort()
         raw_median = pings[len(pings) // 2]
 
         # Apply calibration offset (compensating for transducer ringing and enclosure bezel)
         calibrated = max(2.0, raw_median - self.pins.DISTANCE_OFFSET_CM)
+        self._last_valid_distance = calibrated
         return round(calibrated, 1)
 
     def _single_ultrasonic_ping(self) -> Optional[float]:
         with self._lock:
+            # Ensure TRIG is LOW and stable before firing
+            GPIO.output(self.pins.ULTRASONIC_TRIG, GPIO.LOW)
+            time.sleep(0.000005)
+
             # 10us trigger pulse
             GPIO.output(self.pins.ULTRASONIC_TRIG, GPIO.HIGH)
-            time.sleep(0.00001)
+            time.sleep(0.000010)
             GPIO.output(self.pins.ULTRASONIC_TRIG, GPIO.LOW)
 
             t0 = time.perf_counter()
-            timeout_start = t0 + 0.04
+            timeout_start = t0 + 0.030
             while GPIO.input(self.pins.ULTRASONIC_ECHO) == GPIO.LOW:
                 if time.perf_counter() > timeout_start:
                     return None
             pulse_start = time.perf_counter()
 
-            timeout_echo = pulse_start + 0.04
+            # Timeout after ~30ms (corresponding to >5 meters, well beyond desk range)
+            timeout_echo = pulse_start + 0.030
             while GPIO.input(self.pins.ULTRASONIC_ECHO) == GPIO.HIGH:
                 if time.perf_counter() > timeout_echo:
                     return None
             pulse_end = time.perf_counter()
 
             pulse_duration = pulse_end - pulse_start
-            if pulse_duration <= 0:
+            if pulse_duration <= 0.000050:  # < 50us (under 1 cm noise)
                 return None
 
             # Speed of sound is 343 m/s = 34300 cm/s
-            return (pulse_duration * 34300.0) / 2.0
+            dist = (pulse_duration * 34300.0) / 2.0
+            return dist if 2.0 <= dist <= 300.0 else None
 
     def read_temp_c(self) -> Optional[float]:
         """Reads ambient temperature from KY-001 DS18B20 via Linux 1-Wire interface."""
