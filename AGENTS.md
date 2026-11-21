@@ -106,7 +106,7 @@ The Gateway is the central brain running on a **Raspberry Pi 4 Model B** (or any
 | **HC-SR04 TRIG** | **GPIO 23** | Pin 16 | 3.3V Output pulse (10µs) |
 | **HC-SR04 ECHO** | **GPIO 24** | Pin 18 | **5V Input $\rightarrow$ 1kΩ / 2kΩ (or 10k/20k) divider to 3.3V** |
 | **28BYJ-48 Stepper IN1–IN4** | **GPIO 5, 6, 13, 19** | Pins 29, 31, 33, 35 | ULN2003 driver powered by 5V external rail |
-| **LED Lamp MOSFET PWM** | **GPIO 18** | Pin 12 | Hardware PWM0 (1000 Hz) dynamic brightness |
+| **LED Lamp PWM (ULN2003 IN5/OUT5)** | **GPIO 18** | Pin 12 | Hardware PWM0 (1000 Hz) -> ULN2003 IN5; OUT5 drives COB LED [-] |
 | *(Optional Limit Switch)* | *(GPIO 17)* | *(Pin 11)* | *Optional; M7 safety stop satisfied via software bounds* |
 
 ### 4.2 Software Stack & Architecture

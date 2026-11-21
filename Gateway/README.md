@@ -39,7 +39,7 @@ This component serves as the central intelligent edge controller for the Smart W
 | **Stepper IN2** | ULN2003 Driver | Pin 31 | **GPIO 6** | Half-step phase 2 |
 | **Stepper IN3** | ULN2003 Driver | Pin 33 | **GPIO 13** | Half-step phase 3 |
 | **Stepper IN4** | ULN2003 Driver | Pin 35 | **GPIO 19** | Half-step phase 4 |
-| **LED PWM** | MOSFET Gate | Pin 12 | **GPIO 18** | Hardware PWM0 (1000 Hz) |
+| **LED PWM** | ULN2003 IN5 / OUT5 | Pin 12 | **GPIO 18** | Hardware PWM0 (1000 Hz) -> ULN2003 IN5; OUT5 sinks COB LED [-] |
 | **Servo PWM** | SG90 Servo Signal | Pin 32 | **GPIO 12** | PWM (50 Hz, 2.5%–12.5% duty) |
 | **Power** | Sensors & Actuators | Pins 2, 4 (5V) / 1, 17 (3.3V) | - | Ensure common GND across all devices |
 

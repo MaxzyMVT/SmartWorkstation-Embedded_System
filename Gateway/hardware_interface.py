@@ -9,7 +9,7 @@ Hardware Specifications (Physical BOM):
     (Remote Sensors: Node 1 FSR402 Seat Mat | Node 2 KY-037 Sound & BH1750 Ambient Light I2C)
 - Local Gateway Actuators (Mandatory Requirement M2):
     1. 28BYJ-48 Stepper Motor + ULN2003 (Curtain on GPIO 5, 6, 13, 19; software M7 safety bounds)
-    2. Dynamic LED Desk Lamp (Hardware PWM0 on GPIO 18 via N-Channel MOSFET)
+    2. Dynamic COB LED Desk Lamp (Hardware PWM0 on GPIO 18 via ULN2003 Channel 5 IN5/OUT5 or MOSFET)
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ class PinConfig:
     STEPPER_IN3: int = 13       # Pin 33
     STEPPER_IN4: int = 19       # Pin 35
 
-    # 4. LED Light Bar (MOSFET Gate PWM)
+    # 4. Dynamic Task Lighting (ULN2003 Channel 5 IN5/OUT5 or MOSFET Gate PWM)
     LED_PWM_PIN: int = 18       # Pin 12 (Hardware PWM0 on RPi, 1000 Hz)
 
 

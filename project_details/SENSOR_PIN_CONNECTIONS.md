@@ -17,7 +17,7 @@
 | **HC-SR04 Ultrasonic Sensor** | **Distance / Ergonomics** *(Type 4)* | **Gateway (Raspberry Pi 4)** | **TRIG: GPIO 23** (Pin 16)<br>**ECHO: GPIO 24** (Pin 18) | 5V VCC, **3.3V Logic** | **CRITICAL: 1kΩ / 2kΩ voltage divider on ECHO** to protect Pi 3.3V GPIO |
 | **KY-001 DS18B20 Temp Sensor** | **Ambient Temperature** *(Type 5)* | **Gateway (Raspberry Pi 4)** | **DATA: GPIO 4** (Pin 7, 1-Wire Bus) | 3.3V | Standard Linux 1-Wire interface (`/sys/bus/w1/devices/28-*`); onboard 4.7kΩ pull-up |
 | **28BYJ-48 Stepper Motor** | **Physical Actuator (M2)** | **Gateway (Raspberry Pi 4)** | **IN1: GPIO 5** (Pin 29)<br>**IN2: GPIO 6** (Pin 31)<br>**IN3: GPIO 13** (Pin 33)<br>**IN4: GPIO 19** (Pin 35) | 5V External Rail | Driven via ULN2003 Darlington array; M7 software safety bounds (0–4096 half-steps) |
-| **Dynamic Task Light Bar** | **Supplementary PWM Lamp** | **Gateway (Raspberry Pi 4)** | **GATE: GPIO 18** (Pin 12, Hardware PWM0) | 5V External Rail | N-Channel Logic-Level MOSFET (e.g. IRLZ44N); 1000 Hz PWM frequency |
+| **Dynamic Task Light (COB LED)** | **PWM Lighting Actuator** | **Gateway (Raspberry Pi 4)** | **IN5: GPIO 18** (Pin 12, Hardware PWM0)<br>**OUT5**: COB LED **`[-]`** | 5V Rail to COB `[5V+]` | Driven via ULN2003 Channel 5 (IN5/OUT5); 1000 Hz PWM dimming (Method 2) |
 
 ---
 
@@ -173,18 +173,29 @@ Physical mechanical motion device providing closed-loop intervention (lowers cur
 | **IN3** | **GPIO 13** | Physical Pin 33 | Stepper half-step coil phase 3 |
 | **IN4** | **GPIO 19** | Physical Pin 35 | Stepper half-step coil phase 4 |
 
-#### 2. Dynamic Task Lighting (5V COB LED Bar / Strip)
+#### 2. Dynamic Task Lighting (5V COB LED Bar / Strip via ULN2003 Channel 5 — Method 2)
 Proportional closed-loop illumination control to maintain 450–550 Lux on the desk.
 The COB LED plate features dual-voltage solder pads (`3V+`, `-`, `5V+`, `-`):
 - **Pad `5V+`**: Connect to the **+5V power supply rail** (contains the internal current-limiting resistor for 5V).
-- **Pad `-`**: Connect to the **DRAIN** of the N-Channel MOSFET (or ULN2003 collector channel).
+- **Pad `-`**: Connect to **`OUT5`** on the ULN2003 driver board.
 - **Pad `3V+`**: **LEAVE UNCONNECTED** (used only for 3V–3.7V battery supplies; connecting 5V here will overheat/burn out the LEDs).
-- **Control Circuit (N-Channel MOSFET e.g. IRLZ44N / 2N7000 / AO3400)**:
-  - **GATE**: Connect to **GPIO 18 (Physical Pin 12, Hardware PWM0)** via a $100\Omega$ current-limiting resistor, with a $10\text{k}\Omega$ pull-down resistor to GND.
-  - **SOURCE**: Connect to Power GND (Common Ground).
-  - **DRAIN**: Connect to the COB LED **`-`** pad.
-  - **5V+**: Connect to +5V rail.
-  *(Alternatively, an unused channel on the ULN2003 stepper board such as IN5/OUT5 can be used to sink current up to 500mA).*
+
+```
+   +5V Power Rail -------------------------> COB LED [5V+]
+                                            COB LED [-]
+                                                |
+   RPi GPIO 18 (Pin 12, PWM0) ---> [IN5]        |
+                                  ULN2003 Board v
+   Common GND -------------------> [GND]     [OUT5]
+```
+
+- **Hardware Connection Details**:
+  1. **RPi GPIO 18 (Pin 12)** $\rightarrow$ **`IN5`** on the ULN2003 driver board.
+  2. **COB LED `[-]`** $\rightarrow$ **`OUT5`** on the ULN2003 driver board.
+  3. **COB LED `5V+`** $\rightarrow$ **+5V Power Rail** (shared with stepper power).
+  4. **ULN2003 `GND`** $\rightarrow$ Common GND.
+  5. The ULN2003 Darlington transistor switches the negative return line under 1000 Hz hardware PWM (0% to 100% duty cycle).
+  *(Alternative Method 1: Discrete N-Channel MOSFET e.g. IRLZ44N Gate=GPIO 18, Drain=COB `[-]`, Source=GND).*
 
 ---
 
