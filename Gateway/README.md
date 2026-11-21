@@ -34,7 +34,7 @@ This component serves as the central intelligent edge controller for the Smart W
 | :--- | :--- | :--- | :--- | :--- |
 | **Temp Sensor** | KY-001 DS18B20 Module | Pin 7 | **GPIO 4** | 1-Wire digital bus (3.3V power, Pin 1) |
 | **Ultrasonic TRIG** | HC-SR04 | Pin 16 | **GPIO 23** | 10µs trigger pulse output |
-| **Ultrasonic ECHO** | HC-SR04 | Pin 18 | **GPIO 24** | **Requires 1kΩ / 2kΩ (or 10k/20k) voltage divider to 3.3V** |
+| **Ultrasonic ECHO** | HC-SR04 | Pin 18 | **GPIO 24** | **Requires 10kΩ / 20kΩ (3 × 10kΩ) voltage divider to 3.3V** |
 | **Stepper IN1** | ULN2003 Driver | Pin 29 | **GPIO 5** | Half-step phase 1 |
 | **Stepper IN2** | ULN2003 Driver | Pin 31 | **GPIO 6** | Half-step phase 2 |
 | **Stepper IN3** | ULN2003 Driver | Pin 33 | **GPIO 13** | Half-step phase 3 |

@@ -60,7 +60,7 @@ class PinConfig:
     """BCM Pin Numbering Configuration for Raspberry Pi 4 Model B."""
     # 1. Ultrasonic HC-SR04
     ULTRASONIC_TRIG: int = 23   # Pin 16
-    ULTRASONIC_ECHO: int = 24   # Pin 18 (via 1k/2k voltage divider)
+    ULTRASONIC_ECHO: int = 24   # Pin 18 (via 10k/20k voltage divider using 3x 10k)
     # Hardware calibration: compensates for transducer ringing blind zone and frame bezel
     DISTANCE_OFFSET_CM: float = float(os.getenv("DISTANCE_OFFSET_CM", "5.5"))
 

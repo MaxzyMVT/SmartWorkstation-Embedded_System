@@ -14,7 +14,7 @@
 | **FSR402 Force Sensing Resistor** | **Pressure / Force** *(Type 1)* | **Node 1 (Chair ESP32)** | **GPIO 33** (Analog ADC1 / Digital ISR) | 3.3V | 10kΩ pull-down resistor to GND; wakes from Deep Sleep via `ext0` ISR |
 | **BH1750 Ambient Light Sensor** | **Digital Illuminance** *(Type 2)* | **Node 2 (Desk ESP32)** | **SDA: GPIO 21**<br>**SCL: GPIO 22** (I2C Bus) | 3.3V | I2C Addr `0x23` (ADDR pin floating/GND); 16-bit digital (1–65,535 Lux); white dome cover |
 | **KY-037 Microphone Sensor** | **Acoustic Noise / Sound** *(Type 3)* | **Node 2 (Desk ESP32)** | **AO: GPIO 35** (Analog ADC1) | 3.3V (or 5V) | 50ms windowed peak-to-peak sampling for dBA estimation; DO pin unused |
-| **HC-SR04 Ultrasonic Sensor** | **Distance / Ergonomics** *(Type 4)* | **Gateway (Raspberry Pi 4)** | **TRIG: GPIO 23** (Pin 16)<br>**ECHO: GPIO 24** (Pin 18) | 5V VCC, **3.3V Logic** | **CRITICAL: 1kΩ / 2kΩ voltage divider on ECHO** to protect Pi 3.3V GPIO |
+| **HC-SR04 Ultrasonic Sensor** | **Distance / Ergonomics** *(Type 4)* | **Gateway (Raspberry Pi 4)** | **TRIG: GPIO 23** (Pin 16)<br>**ECHO: GPIO 24** (Pin 18) | 5V VCC, **3.3V Logic** | **CRITICAL: 10kΩ / 20kΩ voltage divider on ECHO** (using 3 × 10kΩ resistors) to protect Pi 3.3V GPIO |
 | **KY-001 DS18B20 Temp Sensor** | **Ambient Temperature** *(Type 5)* | **Gateway (Raspberry Pi 4)** | **DATA: GPIO 4** (Pin 7, 1-Wire Bus) | 3.3V | Standard Linux 1-Wire interface (`/sys/bus/w1/devices/28-*`); onboard 4.7kΩ pull-up |
 | **28BYJ-48 Stepper Motor** | **Physical Actuator (M2)** | **Gateway (Raspberry Pi 4)** | **IN1: GPIO 5** (Pin 29)<br>**IN2: GPIO 6** (Pin 31)<br>**IN3: GPIO 13** (Pin 33)<br>**IN4: GPIO 19** (Pin 35) | 5V External Rail | Driven via ULN2003 Darlington array; M7 software safety bounds (0–4096 half-steps) |
 | **Dynamic Task Light (COB LED)** | **PWM Lighting Actuator** | **Gateway (Raspberry Pi 4)** | **IN5: GPIO 18** (Pin 12, Hardware PWM0)<br>**OUT5**: COB LED **`[-]`** | 5V Rail to COB `[5V+]` | Driven via ULN2003 Channel 5 (IN5/OUT5); 1000 Hz PWM dimming (Method 2) |
@@ -122,7 +122,7 @@ Raspberry Pi 4 Physical Header (40-Pin BCM Pinout)
            3.3V (1)  (2)  5V (External Sensor Rail)
 (KY-001) GPIO 4 (7)  (6)  GND
 (PWM0)  GPIO 18 (12) (14) GND
-(TRIG)  GPIO 23 (16) (18) GPIO 24 (ECHO via 1k/2k divider)
+(TRIG)  GPIO 23 (16) (18) GPIO 24 (ECHO via 10k/20k divider)
 (IN1)   GPIO 5  (29) (30) GND
 (IN2)   GPIO 6  (31) (32) GPIO 12 (Optional Servo)
 (IN3)   GPIO 13 (33) (34) GND
@@ -136,19 +136,19 @@ Measures user face-to-desk distance (35–55 cm optimal study posture).
 - **VCC**: Connect to Raspberry Pi **5V (Physical Pin 2)**.
 - **GND**: Connect to Raspberry Pi **GND (Physical Pin 6)**.
 - **TRIG**: Connect directly to **GPIO 23 (Physical Pin 16)** (RPi 3.3V output pulse triggers the transducer).
-- **ECHO**: **CRITICAL: MUST USE VOLTAGE DIVIDER**:
+- **ECHO**: **CRITICAL: MUST USE VOLTAGE DIVIDER (3 × 10kΩ resistors)**:
   ```
   HC-SR04 ECHO (5V Out) 
           |
-        [1kΩ]
+        [10kΩ] (1x 10kΩ resistor)
           |
           +---> Raspberry Pi GPIO 24 (Pin 18) [3.3V Safe!]
           |
-        [2kΩ] (or two 1kΩ in series)
+        [20kΩ] (2x 10kΩ resistors in series)
           |
          GND
   ```
-  *Formula*: $V_{\text{out}} = 5.0\text{ V} \times \frac{2\text{k}\Omega}{1\text{k}\Omega + 2\text{k}\Omega} = 3.33\text{ V}$.
+  *Formula*: $V_{\text{out}} = 5.0\text{ V} \times \frac{20\text{k}\Omega}{10\text{k}\Omega + 20\text{k}\Omega} = 3.33\text{ V}$.
 
 #### 2. KY-001 DS18B20 1-Wire Digital Temperature Sensor (Thermal Comfort)
 Measures ambient workspace temperature with 0.1°C precision.
@@ -214,6 +214,6 @@ The COB LED plate features dual-voltage solder pads (`3V+`, `-`, `5V+`, `-`):
 ## 6. Wiring & Electrical Best Practices for Demo Day
 
 1. **Common Ground is Mandatory**: Ensure that all power supplies (Raspberry Pi, ESP32 nodes, and external 5V step-down rails) share a single common GND rail.
-2. **Voltage Divider Integrity**: Never connect HC-SR04 `ECHO` directly to Raspberry Pi GPIO without the 1kΩ / 2kΩ resistor divider; 5V will permanently damage the Pi 3.3V SoC.
+2. **Voltage Divider Integrity**: Never connect HC-SR04 `ECHO` directly to Raspberry Pi GPIO without the 10kΩ / 20kΩ resistor divider (using 3 × 10kΩ resistors); 5V will permanently damage the Pi 3.3V SoC.
 3. **I2C Bus Length**: Keep the 4-wire jumper cable between Node 2 ESP32 and BH1750 light sensor under $30\text{ cm}$ to prevent I2C capacitive signal degradation.
 4. **Stepper Motor Power**: Power the ULN2003 driver board from a stable 5V rail (minimum 1.5A power supply) rather than directly from a single Pi GPIO pin to prevent brownout reboots.

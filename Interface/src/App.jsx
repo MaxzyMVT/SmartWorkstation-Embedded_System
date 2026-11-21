@@ -812,7 +812,7 @@ export default function App() {
                   <span className="truncate">Protection & Resistor Dividers</span>
                   <span className="text-[10px] bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded font-mono flex-shrink-0 whitespace-nowrap">Safety</span>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">1kΩ/2kΩ HC-SR04 Echo divider (5V→3.3V) & 10kΩ FSR pull-down</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">10kΩ/20kΩ HC-SR04 Echo divider (5V→3.3V) & 10kΩ FSR pull-down</p>
                 <div className="text-[10px] text-slate-400 mt-1 font-mono break-all sm:break-normal">Protects Pi GPIO & stabilizes seat wake interrupt</div>
               </div>
             </div>
