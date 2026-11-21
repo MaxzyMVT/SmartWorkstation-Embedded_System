@@ -30,7 +30,9 @@ export function subscribeToWorkstationTelemetry(onTelemetry, onConnectionChange)
     brokerUrl = 'wss://broker.emqx.io:8084/mqtt';
   }
 
-  const topic = import.meta.env.VITE_MQTT_TOPIC || 'smart_workstation/telemetry';
+  const topicTelemetry = import.meta.env.VITE_MQTT_TOPIC || 'smart_workstation/telemetry';
+  const topicNode1 = 'smart_workstation/node1';
+  const topicNode2 = 'smart_workstation/node2';
 
   try {
     updateStatus('Connecting...');
@@ -45,7 +47,7 @@ export function subscribeToWorkstationTelemetry(onTelemetry, onConnectionChange)
     mqttClient.on('connect', () => {
       if (isCleanedUp) return;
       updateStatus('MQTT Live');
-      mqttClient.subscribe(topic, { qos: 0 }, (err) => {
+      mqttClient.subscribe([topicTelemetry, topicNode1, topicNode2], { qos: 0 }, (err) => {
         if (err) {
           console.warn('MQTT subscription error:', err);
         }
@@ -53,14 +55,20 @@ export function subscribeToWorkstationTelemetry(onTelemetry, onConnectionChange)
     });
 
     mqttClient.on('message', (receivedTopic, payload) => {
-      if (isCleanedUp || receivedTopic !== topic) return;
+      if (isCleanedUp) return;
       try {
         const raw = JSON.parse(payload.toString());
-        lastMqttTs = Date.now();
-        updateStatus('MQTT Live');
-        onTelemetry({ ...raw, _source: 'mqtt' });
+        if (receivedTopic === topicTelemetry) {
+          lastMqttTs = Date.now();
+          updateStatus('MQTT Live');
+          onTelemetry({ ...raw, _source: 'mqtt', _gateway_rx: Date.now() });
+        } else if (receivedTopic === topicNode1) {
+          onTelemetry({ _type: 'node1_heartbeat', _node1_raw: raw, _rx_node1: Date.now() });
+        } else if (receivedTopic === topicNode2) {
+          onTelemetry({ _type: 'node2_heartbeat', _node2_raw: raw, _rx_node2: Date.now() });
+        }
       } catch (e) {
-        console.warn('Failed to parse MQTT telemetry JSON:', e);
+        console.warn('Failed to parse MQTT message JSON:', e);
       }
     });
 

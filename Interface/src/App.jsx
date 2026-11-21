@@ -14,7 +14,10 @@ import {
   CircuitBoard,
   Zap,
   Server,
-  Layers
+  Layers,
+  Radio,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { subscribeToWorkstationTelemetry } from './telemetryService';
 
@@ -32,6 +35,16 @@ const RFC_STATES = {
 
 export default function App() {
   const [connectionStatus, setConnectionStatus] = useState('Connecting...');
+  const [lastGatewayRx, setLastGatewayRx] = useState(Date.now());
+  const [lastNode1Rx, setLastNode1Rx] = useState(null);
+  const [lastNode2Rx, setLastNode2Rx] = useState(null);
+  const [currentTime, setCurrentTime] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   const [telemetry, setTelemetry] = useState({
     seat: true,
     distance: 42.5,
@@ -50,6 +63,10 @@ export default function App() {
       confidence: 0.96,
       latency_ms: 0.45
     },
+    node_status: {
+      node1: 'ONLINE',
+      node2: 'ONLINE'
+    },
     timestamp: Date.now() / 1000,
     _source: 'init'
   });
@@ -57,6 +74,16 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = subscribeToWorkstationTelemetry(
       (data) => {
+        if (data._type === 'node1_heartbeat') {
+          setLastNode1Rx(data._rx_node1 || Date.now());
+          return;
+        }
+        if (data._type === 'node2_heartbeat') {
+          setLastNode2Rx(data._rx_node2 || Date.now());
+          return;
+        }
+
+        setLastGatewayRx(Date.now());
         setTelemetry((prev) => ({
           ...prev,
           seat: data.seat !== undefined ? Boolean(data.seat) : prev.seat,
@@ -73,6 +100,7 @@ export default function App() {
           break_active: data.break_active !== undefined ? Boolean(data.break_active) : prev.break_active,
           break_remaining_s: data.break_remaining_s !== undefined ? Number(data.break_remaining_s) : prev.break_remaining_s,
           ai_state: data.ai_state || prev.ai_state,
+          node_status: data.node_status || prev.node_status,
           timestamp: data.timestamp || Date.now() / 1000,
           _source: data._source || prev._source
         }));
@@ -120,6 +148,82 @@ export default function App() {
   const mins = Math.floor(sittingMin % 60);
   const formattedSessionTime = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m ${Math.floor((sittingMin % 1) * 60)}s`;
 
+  // Gateway connectivity
+  const gatewayAgeSec = Math.max(0, (currentTime - lastGatewayRx) / 1000);
+  const isGatewayOnline = gatewayAgeSec <= 4.0;
+  const gatewayStatus = isGatewayOnline ? 'ONLINE' : gatewayAgeSec <= 15.0 ? 'LAGGING' : 'OFFLINE';
+
+  // Node 1 (Chair) connectivity
+  const node1DirectAgeSec = lastNode1Rx ? Math.max(0, (currentTime - lastNode1Rx) / 1000) : null;
+  const node1GatewayStatus = telemetry.node_status?.node1;
+  let node1Status = 'STANDBY';
+  let node1Label = 'Not Detected';
+  let node1Desc = 'Awaiting initial chair heartbeat';
+  let node1Theme = 'gray';
+
+  if ((node1DirectAgeSec !== null && node1DirectAgeSec <= 20) || (isGatewayOnline && node1GatewayStatus === 'ONLINE')) {
+    node1Status = 'ONLINE';
+    node1Label = telemetry.seat ? 'Online (Seated)' : 'Online (Active)';
+    node1Desc = `FSR402 Seat Mat • ${telemetry.seat ? 'User Detected' : 'Ready'}`;
+    node1Theme = 'green';
+  } else if (isGatewayOnline && node1GatewayStatus === 'ASLEEP_OR_OFFLINE') {
+    if (!telemetry.seat) {
+      node1Status = 'SLEEP';
+      node1Label = 'Deep Sleep (E3)';
+      node1Desc = 'Chair vacant >60s • Wake on sit (GPIO 33)';
+      node1Theme = 'amber';
+    } else {
+      node1Status = 'OFFLINE';
+      node1Label = 'Disconnected';
+      node1Desc = 'Chair occupied but connection dropped';
+      node1Theme = 'red';
+    }
+  } else if (!isGatewayOnline) {
+    if (node1DirectAgeSec !== null && node1DirectAgeSec <= 20) {
+      node1Status = 'ONLINE';
+      node1Label = 'Online (Direct MQTT)';
+      node1Desc = 'Direct Wi-Fi stream active';
+      node1Theme = 'green';
+    } else {
+      node1Status = 'UNKNOWN';
+      node1Label = 'Gateway Offline';
+      node1Desc = 'Cannot verify node status';
+      node1Theme = 'gray';
+    }
+  }
+
+  // Node 2 (Desk) connectivity
+  const node2DirectAgeSec = lastNode2Rx ? Math.max(0, (currentTime - lastNode2Rx) / 1000) : null;
+  const node2GatewayStatus = telemetry.node_status?.node2;
+  let node2Status = 'STANDBY';
+  let node2Label = 'Not Detected';
+  let node2Desc = 'Awaiting initial desk heartbeat';
+  let node2Theme = 'gray';
+
+  if ((node2DirectAgeSec !== null && node2DirectAgeSec <= 4.0) || (isGatewayOnline && node2GatewayStatus === 'ONLINE')) {
+    node2Status = 'ONLINE';
+    node2Label = 'Online (Streaming)';
+    node2Desc = 'BH1750 Lux (I2C) & KY-037 Sound Active';
+    node2Theme = 'green';
+  } else if (isGatewayOnline && node2GatewayStatus === 'STALE') {
+    node2Status = 'STALE';
+    node2Label = 'Stale / Reconnecting';
+    node2Desc = 'No desk packet received for >5s';
+    node2Theme = 'red';
+  } else if (!isGatewayOnline) {
+    if (node2DirectAgeSec !== null && node2DirectAgeSec <= 4.0) {
+      node2Status = 'ONLINE';
+      node2Label = 'Online (Direct MQTT)';
+      node2Desc = 'Direct Wi-Fi stream active';
+      node2Theme = 'green';
+    } else {
+      node2Status = 'UNKNOWN';
+      node2Label = 'Gateway Offline';
+      node2Desc = 'Cannot verify node status';
+      node2Theme = 'gray';
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#F4F7F9] p-4 sm:p-6 md:p-8 font-sans text-slate-800 flex flex-col gap-4 max-w-7xl mx-auto">
       
@@ -158,6 +262,118 @@ export default function App() {
           <span>Conf: <strong className="text-slate-700 font-semibold">{Math.round((telemetry.ai_state?.confidence || 0.95) * 100)}%</strong></span>
         </div>
       </header>
+
+      {/* Node & Gateway Health / Connectivity Bar */}
+      <section className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-100 flex flex-col gap-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Radio size={16} className="text-indigo-600 animate-pulse" />
+            <h3 className="font-bold text-xs sm:text-sm uppercase tracking-wider text-slate-700">
+              Hardware Nodes & Gateway Connectivity
+            </h3>
+          </div>
+          <span className="text-[11px] font-medium text-slate-400">
+            Auto-refreshing (1 Hz)
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Card 1: Gateway Controller */}
+          <div className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
+            isGatewayOnline ? 'bg-emerald-50/40 border-emerald-200/80' : gatewayStatus === 'LAGGING' ? 'bg-amber-50/40 border-amber-200/80' : 'bg-rose-50/50 border-rose-200'
+          }`}>
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg border ${
+                isGatewayOnline ? 'bg-emerald-100/70 text-emerald-700 border-emerald-300' : 'bg-rose-100 text-rose-700 border-rose-300'
+              }`}>
+                <Server size={18} />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-sm text-slate-800">Gateway</span>
+                  <span className="text-[10px] font-medium text-slate-400">(RPi 4)</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {isGatewayOnline ? 'HC-SR04 & DS18B20 Active' : 'Daemon Unreachable'}
+                </p>
+              </div>
+            </div>
+            <div className="text-right flex flex-col items-end">
+              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                isGatewayOnline ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${isGatewayOnline ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'}`}></span>
+                {isGatewayOnline ? 'ONLINE' : 'OFFLINE'}
+              </span>
+              <span className="text-[10px] text-slate-400 mt-1">
+                {isGatewayOnline ? `${gatewayAgeSec.toFixed(1)}s heartbeat` : 'No signal'}
+              </span>
+            </div>
+          </div>
+
+          {/* Card 2: Sensor Node 1 (Chair) */}
+          <div className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
+            node1Theme === 'green' ? 'bg-emerald-50/40 border-emerald-200/80' : node1Theme === 'amber' ? 'bg-amber-50/40 border-amber-200/80' : 'bg-slate-50 border-slate-200'
+          }`}>
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg border ${
+                node1Theme === 'green' ? 'bg-emerald-100/70 text-emerald-700 border-emerald-300' : node1Theme === 'amber' ? 'bg-amber-100 text-amber-700 border-amber-300' : 'bg-slate-200/60 text-slate-600 border-slate-300'
+              }`}>
+                <Armchair size={18} />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-sm text-slate-800">Node 1</span>
+                  <span className="text-[10px] font-medium text-slate-400">(Chair)</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">{node1Desc}</p>
+              </div>
+            </div>
+            <div className="text-right flex flex-col items-end">
+              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                node1Theme === 'green' ? 'bg-emerald-100 text-emerald-800' : node1Theme === 'amber' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${node1Theme === 'green' ? 'bg-emerald-500 animate-ping' : node1Theme === 'amber' ? 'bg-amber-500' : 'bg-slate-400'}`}></span>
+                {node1Label}
+              </span>
+              <span className="text-[10px] text-slate-400 mt-1">
+                {node1DirectAgeSec !== null ? `${node1DirectAgeSec.toFixed(0)}s ago` : 'MQTT'}
+              </span>
+            </div>
+          </div>
+
+          {/* Card 3: Sensor Node 2 (Desk) */}
+          <div className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
+            node2Theme === 'green' ? 'bg-emerald-50/40 border-emerald-200/80' : node2Theme === 'red' ? 'bg-rose-50/50 border-rose-200' : 'bg-slate-50 border-slate-200'
+          }`}>
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg border ${
+                node2Theme === 'green' ? 'bg-emerald-100/70 text-emerald-700 border-emerald-300' : 'bg-rose-100 text-rose-700 border-rose-300'
+              }`}>
+                <Sun size={18} />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-sm text-slate-800">Node 2</span>
+                  <span className="text-[10px] font-medium text-slate-400">(Desk)</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">{node2Desc}</p>
+              </div>
+            </div>
+            <div className="text-right flex flex-col items-end">
+              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                node2Theme === 'green' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${node2Theme === 'green' ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'}`}></span>
+                {node2Label}
+              </span>
+              <span className="text-[10px] text-slate-400 mt-1">
+                {node2DirectAgeSec !== null ? `${node2DirectAgeSec.toFixed(0)}s ago` : '1 Hz'}
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* Mandatory Study Break Countdown Banner */}
       {telemetry.break_active && (
@@ -264,13 +480,20 @@ export default function App() {
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
           !telemetry.seat ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
-          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
-            <div className={`p-2 rounded-lg border ${
-              !telemetry.seat ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
-            }`}>
-              <Armchair size={20} />
+          <div className="flex items-center justify-between font-bold text-base sm:text-lg">
+            <div className="flex items-center gap-2.5">
+              <div className={`p-2 rounded-lg border ${
+                !telemetry.seat ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+              }`}>
+                <Armchair size={20} />
+              </div>
+              Seat
             </div>
-            Seat
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+              node1Theme === 'green' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : node1Theme === 'amber' ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-600'
+            }`}>
+              Node 1 ({node1Status})
+            </span>
           </div>
 
           <div className="my-auto flex flex-col items-center justify-center text-center py-2">
@@ -296,13 +519,20 @@ export default function App() {
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
           telemetry.distance < 30 || telemetry.distance > 70 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
-          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
-            <div className={`p-2 rounded-lg border ${
-              telemetry.distance < 30 || telemetry.distance > 70 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
-            }`}>
-              <User size={20} />
+          <div className="flex items-center justify-between font-bold text-base sm:text-lg">
+            <div className="flex items-center gap-2.5">
+              <div className={`p-2 rounded-lg border ${
+                telemetry.distance < 30 || telemetry.distance > 70 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+              }`}>
+                <User size={20} />
+              </div>
+              Distance
             </div>
-            Distance
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+              isGatewayOnline ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+            }`}>
+              Gateway ({gatewayStatus})
+            </span>
           </div>
 
           <div className="my-auto flex flex-col items-center justify-center text-center py-2">
@@ -337,13 +567,20 @@ export default function App() {
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
           telemetry.light < 300 || telemetry.light > 1000 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
-          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
-            <div className={`p-2 rounded-lg border ${
-              telemetry.light < 300 || telemetry.light > 1000 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
-            }`}>
-              <Sun size={20} />
+          <div className="flex items-center justify-between font-bold text-base sm:text-lg">
+            <div className="flex items-center gap-2.5">
+              <div className={`p-2 rounded-lg border ${
+                telemetry.light < 300 || telemetry.light > 1000 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+              }`}>
+                <Sun size={20} />
+              </div>
+              Light
             </div>
-            Light
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+              node2Theme === 'green' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+            }`}>
+              Node 2 ({node2Status})
+            </span>
           </div>
 
           <div className="my-auto flex flex-col items-center justify-center text-center py-2">
@@ -378,13 +615,20 @@ export default function App() {
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
           telemetry.temp > 28.0 || telemetry.temp < 20.0 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
-          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
-            <div className={`p-2 rounded-lg border ${
-              telemetry.temp > 28.0 || telemetry.temp < 20.0 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
-            }`}>
-              <Thermometer size={20} />
+          <div className="flex items-center justify-between font-bold text-base sm:text-lg">
+            <div className="flex items-center gap-2.5">
+              <div className={`p-2 rounded-lg border ${
+                telemetry.temp > 28.0 || telemetry.temp < 20.0 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+              }`}>
+                <Thermometer size={20} />
+              </div>
+              Temp
             </div>
-            Temp
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+              isGatewayOnline ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+            }`}>
+              Gateway ({gatewayStatus})
+            </span>
           </div>
 
           <div className="my-auto flex flex-col items-center justify-center text-center py-2">
@@ -419,13 +663,20 @@ export default function App() {
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
           telemetry.sound > 65.0 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
-          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg">
-            <div className={`p-2 rounded-lg border ${
-              telemetry.sound > 65.0 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
-            }`}>
-              <Volume2 size={20} />
+          <div className="flex items-center justify-between font-bold text-base sm:text-lg">
+            <div className="flex items-center gap-2.5">
+              <div className={`p-2 rounded-lg border ${
+                telemetry.sound > 65.0 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+              }`}>
+                <Volume2 size={20} />
+              </div>
+              Sound
             </div>
-            Sound
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+              node2Theme === 'green' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+            }`}>
+              Node 2 ({node2Status})
+            </span>
           </div>
 
           <div className="my-auto flex flex-col items-center justify-center text-center py-2">
