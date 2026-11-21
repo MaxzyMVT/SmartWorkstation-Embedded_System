@@ -122,7 +122,7 @@ export default function App() {
       {/* Header Card */}
       <header className="bg-white rounded-2xl p-5 sm:p-6 shadow-sm border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
-          <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight">Smart Workstation</h1>
+          <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight">SmartWorkstation Dashboard</h1>
           <div className="flex items-center gap-2">
             <span className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">
               <Cpu size={14} className="text-indigo-500" /> RFC Model
