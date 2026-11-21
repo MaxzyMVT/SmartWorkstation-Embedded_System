@@ -152,42 +152,50 @@ export default function App() {
   const gatewayAgeSec = Math.max(0, (currentTime - lastGatewayRx) / 1000);
   const isGatewayOnline = gatewayAgeSec <= 4.0;
   const gatewayStatus = isGatewayOnline ? 'ONLINE' : gatewayAgeSec <= 15.0 ? 'LAGGING' : 'OFFLINE';
+  const gatewayBadgeText = isGatewayOnline ? 'ONLINE' : gatewayAgeSec <= 15.0 ? 'LAG' : 'OFFLINE';
+  const gatewaySubtext = isGatewayOnline ? `${gatewayAgeSec.toFixed(1)}s heartbeat` : 'No signal';
 
   // Node 1 (Chair) connectivity
   const node1DirectAgeSec = lastNode1Rx ? Math.max(0, (currentTime - lastNode1Rx) / 1000) : null;
   const node1GatewayStatus = telemetry.node_status?.node1;
   let node1Status = 'STANDBY';
-  let node1Label = 'Not Detected';
-  let node1Desc = 'Awaiting initial chair heartbeat';
+  let node1BadgeText = 'STANDBY';
+  let node1Subtext = 'Awaiting signal';
+  let node1Desc = 'FSR402 Seat Mat';
   let node1Theme = 'gray';
 
   if ((node1DirectAgeSec !== null && node1DirectAgeSec <= 20) || (isGatewayOnline && node1GatewayStatus === 'ONLINE')) {
     node1Status = 'ONLINE';
-    node1Label = telemetry.seat ? 'Online (Seated)' : 'Online (Active)';
-    node1Desc = `FSR402 Seat Mat • ${telemetry.seat ? 'User Detected' : 'Ready'}`;
+    node1BadgeText = 'ONLINE';
+    node1Subtext = telemetry.seat ? 'Seated' : 'Ready';
+    node1Desc = `FSR402 Mat • ${telemetry.seat ? 'Occupied' : 'Ready'}`;
     node1Theme = 'green';
   } else if (isGatewayOnline && node1GatewayStatus === 'ASLEEP_OR_OFFLINE') {
     if (!telemetry.seat) {
       node1Status = 'SLEEP';
-      node1Label = 'Deep Sleep (E3)';
-      node1Desc = 'Chair vacant >60s • Wake on sit (GPIO 33)';
+      node1BadgeText = 'SLEEP';
+      node1Subtext = 'Vacant >60s';
+      node1Desc = 'Low-power deep sleep (E3)';
       node1Theme = 'amber';
     } else {
       node1Status = 'OFFLINE';
-      node1Label = 'Disconnected';
-      node1Desc = 'Chair occupied but connection dropped';
+      node1BadgeText = 'OFFLINE';
+      node1Subtext = 'Seated / Lost';
+      node1Desc = 'Connection dropped';
       node1Theme = 'red';
     }
   } else if (!isGatewayOnline) {
     if (node1DirectAgeSec !== null && node1DirectAgeSec <= 20) {
       node1Status = 'ONLINE';
-      node1Label = 'Online (Direct MQTT)';
-      node1Desc = 'Direct Wi-Fi stream active';
+      node1BadgeText = 'ONLINE';
+      node1Subtext = 'Direct Wi-Fi';
+      node1Desc = 'FSR402 Mat active';
       node1Theme = 'green';
     } else {
       node1Status = 'UNKNOWN';
-      node1Label = 'Gateway Offline';
-      node1Desc = 'Cannot verify node status';
+      node1BadgeText = 'OFFLINE';
+      node1Subtext = 'GW Offline';
+      node1Desc = 'Status unverified';
       node1Theme = 'gray';
     }
   }
@@ -196,30 +204,35 @@ export default function App() {
   const node2DirectAgeSec = lastNode2Rx ? Math.max(0, (currentTime - lastNode2Rx) / 1000) : null;
   const node2GatewayStatus = telemetry.node_status?.node2;
   let node2Status = 'STANDBY';
-  let node2Label = 'Not Detected';
-  let node2Desc = 'Awaiting initial desk heartbeat';
+  let node2BadgeText = 'STANDBY';
+  let node2Subtext = 'Awaiting signal';
+  let node2Desc = 'BH1750 & KY-037';
   let node2Theme = 'gray';
 
   if ((node2DirectAgeSec !== null && node2DirectAgeSec <= 4.0) || (isGatewayOnline && node2GatewayStatus === 'ONLINE')) {
     node2Status = 'ONLINE';
-    node2Label = 'Online (Streaming)';
-    node2Desc = 'BH1750 Lux (I2C) & KY-037 Sound Active';
+    node2BadgeText = 'ONLINE';
+    node2Subtext = 'Streaming';
+    node2Desc = 'BH1750 Lux & KY-037 Active';
     node2Theme = 'green';
   } else if (isGatewayOnline && node2GatewayStatus === 'STALE') {
     node2Status = 'STALE';
-    node2Label = 'Stale / Reconnecting';
-    node2Desc = 'No desk packet received for >5s';
+    node2BadgeText = 'STALE';
+    node2Subtext = '>5s no packet';
+    node2Desc = 'Reconnecting...';
     node2Theme = 'red';
   } else if (!isGatewayOnline) {
     if (node2DirectAgeSec !== null && node2DirectAgeSec <= 4.0) {
       node2Status = 'ONLINE';
-      node2Label = 'Online (Direct MQTT)';
-      node2Desc = 'Direct Wi-Fi stream active';
+      node2BadgeText = 'ONLINE';
+      node2Subtext = 'Direct Wi-Fi';
+      node2Desc = 'Desk stream active';
       node2Theme = 'green';
     } else {
       node2Status = 'UNKNOWN';
-      node2Label = 'Gateway Offline';
-      node2Desc = 'Cannot verify node status';
+      node2BadgeText = 'OFFLINE';
+      node2Subtext = 'GW Offline';
+      node2Desc = 'Status unverified';
       node2Theme = 'gray';
     }
   }
@@ -231,11 +244,11 @@ export default function App() {
       <header className="bg-white rounded-2xl p-5 sm:p-6 shadow-sm border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
           <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight">SmartWorkstation Dashboard</h1>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider flex-shrink-0 whitespace-nowrap">
               <Cpu size={14} className="text-indigo-500" /> RFC Model
             </span>
-            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold flex-shrink-0 whitespace-nowrap ${
               connectionStatus.includes('Live') 
                 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
                 : connectionStatus.includes('Sync')
@@ -255,7 +268,7 @@ export default function App() {
         </div>
 
         {/* Live Model Performance Pill */}
-        <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
+        <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 flex-shrink-0 whitespace-nowrap">
           <Activity size={15} className="text-slate-400" />
           <span>Inference: <strong className="text-slate-700 font-semibold">{Number(telemetry.ai_state?.latency_ms || 0.45).toFixed(2)} ms</strong></span>
           <span className="text-slate-300">|</span>
@@ -267,108 +280,108 @@ export default function App() {
       <section className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-100 flex flex-col gap-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
-            <Radio size={16} className="text-indigo-600 animate-pulse" />
+            <Radio size={16} className="text-indigo-600 animate-pulse flex-shrink-0" />
             <h3 className="font-bold text-xs sm:text-sm uppercase tracking-wider text-slate-700">
               Hardware Nodes & Gateway Connectivity
             </h3>
           </div>
-          <span className="text-[11px] font-medium text-slate-400">
+          <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">
             Auto-refreshing (1 Hz)
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {/* Card 1: Gateway Controller */}
-          <div className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
+          <div className={`p-3 sm:p-3.5 rounded-xl border flex items-center justify-between gap-3 min-w-0 transition-colors ${
             isGatewayOnline ? 'bg-emerald-50/40 border-emerald-200/80' : gatewayStatus === 'LAGGING' ? 'bg-amber-50/40 border-amber-200/80' : 'bg-rose-50/50 border-rose-200'
           }`}>
-            <div className="flex items-center gap-3">
-              <div className={`p-2 rounded-lg border ${
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+              <div className={`p-2 rounded-lg border flex-shrink-0 ${
                 isGatewayOnline ? 'bg-emerald-100/70 text-emerald-700 border-emerald-300' : 'bg-rose-100 text-rose-700 border-rose-300'
               }`}>
                 <Server size={18} />
               </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-sm text-slate-800">Gateway</span>
-                  <span className="text-[10px] font-medium text-slate-400">(RPi 4)</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-bold text-sm text-slate-800 truncate">Gateway</span>
+                  <span className="text-[10px] font-medium text-slate-400 whitespace-nowrap">(RPi 4)</span>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">
+                <p className="text-[11px] text-slate-500 mt-0.5 truncate">
                   {isGatewayOnline ? 'HC-SR04 & DS18B20 Active' : 'Daemon Unreachable'}
                 </p>
               </div>
             </div>
-            <div className="text-right flex flex-col items-end">
-              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold ${
+            <div className="text-right flex flex-col items-end flex-shrink-0">
+              <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold whitespace-nowrap uppercase tracking-wider ${
                 isGatewayOnline ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
               }`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${isGatewayOnline ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'}`}></span>
-                {isGatewayOnline ? 'ONLINE' : 'OFFLINE'}
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isGatewayOnline ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'}`}></span>
+                {gatewayBadgeText}
               </span>
-              <span className="text-[10px] text-slate-400 mt-1">
-                {isGatewayOnline ? `${gatewayAgeSec.toFixed(1)}s heartbeat` : 'No signal'}
+              <span className="text-[10px] text-slate-400 mt-0.5 whitespace-nowrap">
+                {gatewaySubtext}
               </span>
             </div>
           </div>
 
           {/* Card 2: Sensor Node 1 (Chair) */}
-          <div className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
+          <div className={`p-3 sm:p-3.5 rounded-xl border flex items-center justify-between gap-3 min-w-0 transition-colors ${
             node1Theme === 'green' ? 'bg-emerald-50/40 border-emerald-200/80' : node1Theme === 'amber' ? 'bg-amber-50/40 border-amber-200/80' : 'bg-slate-50 border-slate-200'
           }`}>
-            <div className="flex items-center gap-3">
-              <div className={`p-2 rounded-lg border ${
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+              <div className={`p-2 rounded-lg border flex-shrink-0 ${
                 node1Theme === 'green' ? 'bg-emerald-100/70 text-emerald-700 border-emerald-300' : node1Theme === 'amber' ? 'bg-amber-100 text-amber-700 border-amber-300' : 'bg-slate-200/60 text-slate-600 border-slate-300'
               }`}>
                 <Armchair size={18} />
               </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-sm text-slate-800">Node 1</span>
-                  <span className="text-[10px] font-medium text-slate-400">(Chair)</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-bold text-sm text-slate-800 truncate">Node 1</span>
+                  <span className="text-[10px] font-medium text-slate-400 whitespace-nowrap">(Chair)</span>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">{node1Desc}</p>
+                <p className="text-[11px] text-slate-500 mt-0.5 truncate">{node1Desc}</p>
               </div>
             </div>
-            <div className="text-right flex flex-col items-end">
-              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold ${
+            <div className="text-right flex flex-col items-end flex-shrink-0">
+              <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold whitespace-nowrap uppercase tracking-wider ${
                 node1Theme === 'green' ? 'bg-emerald-100 text-emerald-800' : node1Theme === 'amber' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
               }`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${node1Theme === 'green' ? 'bg-emerald-500 animate-ping' : node1Theme === 'amber' ? 'bg-amber-500' : 'bg-slate-400'}`}></span>
-                {node1Label}
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${node1Theme === 'green' ? 'bg-emerald-500 animate-ping' : node1Theme === 'amber' ? 'bg-amber-500' : 'bg-slate-400'}`}></span>
+                {node1BadgeText}
               </span>
-              <span className="text-[10px] text-slate-400 mt-1">
-                {node1DirectAgeSec !== null ? `${node1DirectAgeSec.toFixed(0)}s ago` : 'MQTT'}
+              <span className="text-[10px] text-slate-400 mt-0.5 whitespace-nowrap">
+                {node1Subtext}
               </span>
             </div>
           </div>
 
           {/* Card 3: Sensor Node 2 (Desk) */}
-          <div className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
+          <div className={`p-3 sm:p-3.5 rounded-xl border flex items-center justify-between gap-3 min-w-0 transition-colors ${
             node2Theme === 'green' ? 'bg-emerald-50/40 border-emerald-200/80' : node2Theme === 'red' ? 'bg-rose-50/50 border-rose-200' : 'bg-slate-50 border-slate-200'
           }`}>
-            <div className="flex items-center gap-3">
-              <div className={`p-2 rounded-lg border ${
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+              <div className={`p-2 rounded-lg border flex-shrink-0 ${
                 node2Theme === 'green' ? 'bg-emerald-100/70 text-emerald-700 border-emerald-300' : 'bg-rose-100 text-rose-700 border-rose-300'
               }`}>
                 <Sun size={18} />
               </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-sm text-slate-800">Node 2</span>
-                  <span className="text-[10px] font-medium text-slate-400">(Desk)</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-bold text-sm text-slate-800 truncate">Node 2</span>
+                  <span className="text-[10px] font-medium text-slate-400 whitespace-nowrap">(Desk)</span>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">{node2Desc}</p>
+                <p className="text-[11px] text-slate-500 mt-0.5 truncate">{node2Desc}</p>
               </div>
             </div>
-            <div className="text-right flex flex-col items-end">
-              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold ${
+            <div className="text-right flex flex-col items-end flex-shrink-0">
+              <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold whitespace-nowrap uppercase tracking-wider ${
                 node2Theme === 'green' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
               }`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${node2Theme === 'green' ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'}`}></span>
-                {node2Label}
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${node2Theme === 'green' ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'}`}></span>
+                {node2BadgeText}
               </span>
-              <span className="text-[10px] text-slate-400 mt-1">
-                {node2DirectAgeSec !== null ? `${node2DirectAgeSec.toFixed(0)}s ago` : '1 Hz'}
+              <span className="text-[10px] text-slate-400 mt-0.5 whitespace-nowrap">
+                {node2Subtext}
               </span>
             </div>
           </div>
@@ -480,19 +493,19 @@ export default function App() {
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
           !telemetry.seat ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
-          <div className="flex items-center justify-between font-bold text-base sm:text-lg">
-            <div className="flex items-center gap-2.5">
-              <div className={`p-2 rounded-lg border ${
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+            <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg min-w-0">
+              <div className={`p-2 rounded-lg border flex-shrink-0 ${
                 !telemetry.seat ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
               }`}>
                 <Armchair size={20} />
               </div>
-              Seat
+              <span className="truncate">Seat</span>
             </div>
-            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap ${
               node1Theme === 'green' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : node1Theme === 'amber' ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-600'
             }`}>
-              Node 1 ({node1Status})
+              Node 1 • {node1Status}
             </span>
           </div>
 
@@ -519,19 +532,19 @@ export default function App() {
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
           telemetry.distance < 30 || telemetry.distance > 70 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
-          <div className="flex items-center justify-between font-bold text-base sm:text-lg">
-            <div className="flex items-center gap-2.5">
-              <div className={`p-2 rounded-lg border ${
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+            <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg min-w-0">
+              <div className={`p-2 rounded-lg border flex-shrink-0 ${
                 telemetry.distance < 30 || telemetry.distance > 70 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
               }`}>
                 <User size={20} />
               </div>
-              Distance
+              <span className="truncate">Distance</span>
             </div>
-            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap ${
               isGatewayOnline ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
             }`}>
-              Gateway ({gatewayStatus})
+              Gateway • {gatewayStatus}
             </span>
           </div>
 
@@ -567,19 +580,19 @@ export default function App() {
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
           telemetry.light < 300 || telemetry.light > 1000 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
-          <div className="flex items-center justify-between font-bold text-base sm:text-lg">
-            <div className="flex items-center gap-2.5">
-              <div className={`p-2 rounded-lg border ${
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+            <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg min-w-0">
+              <div className={`p-2 rounded-lg border flex-shrink-0 ${
                 telemetry.light < 300 || telemetry.light > 1000 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
               }`}>
                 <Sun size={20} />
               </div>
-              Light
+              <span className="truncate">Light</span>
             </div>
-            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap ${
               node2Theme === 'green' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
             }`}>
-              Node 2 ({node2Status})
+              Node 2 • {node2Status}
             </span>
           </div>
 
@@ -615,19 +628,19 @@ export default function App() {
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
           telemetry.temp > 28.0 || telemetry.temp < 20.0 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
-          <div className="flex items-center justify-between font-bold text-base sm:text-lg">
-            <div className="flex items-center gap-2.5">
-              <div className={`p-2 rounded-lg border ${
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+            <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg min-w-0">
+              <div className={`p-2 rounded-lg border flex-shrink-0 ${
                 telemetry.temp > 28.0 || telemetry.temp < 20.0 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
               }`}>
                 <Thermometer size={20} />
               </div>
-              Temp
+              <span className="truncate">Temp</span>
             </div>
-            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap ${
               isGatewayOnline ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
             }`}>
-              Gateway ({gatewayStatus})
+              Gateway • {gatewayStatus}
             </span>
           </div>
 
@@ -663,19 +676,19 @@ export default function App() {
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
           telemetry.sound > 65.0 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
-          <div className="flex items-center justify-between font-bold text-base sm:text-lg">
-            <div className="flex items-center gap-2.5">
-              <div className={`p-2 rounded-lg border ${
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+            <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg min-w-0">
+              <div className={`p-2 rounded-lg border flex-shrink-0 ${
                 telemetry.sound > 65.0 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
               }`}>
                 <Volume2 size={20} />
               </div>
-              Sound
+              <span className="truncate">Sound</span>
             </div>
-            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap ${
               node2Theme === 'green' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
             }`}>
-              Node 2 ({node2Status})
+              Node 2 • {node2Status}
             </span>
           </div>
 
@@ -728,79 +741,79 @@ export default function App() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
           {/* Column 1: Actuators (Requirement M2) */}
-          <div className="bg-[#F8FAFC] rounded-xl p-4 border border-slate-100 flex flex-col gap-3">
-            <div className="flex items-center gap-2 font-bold text-slate-700 uppercase tracking-wider text-[11px]">
-              <Zap size={14} className="text-amber-500" />
-              <span>Closed-Loop Actuators (M2)</span>
+          <div className="bg-[#F8FAFC] rounded-xl p-4 border border-slate-100 flex flex-col gap-3 min-w-0">
+            <div className="flex items-center gap-2 font-bold text-slate-700 uppercase tracking-wider text-[11px] min-w-0">
+              <Zap size={14} className="text-amber-500 flex-shrink-0" />
+              <span className="truncate">Closed-Loop Actuators (M2)</span>
             </div>
             <div className="flex flex-col gap-2.5">
               <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
-                <div className="flex items-center justify-between font-semibold text-slate-800">
-                  <span>28BYJ-48 Stepper Motor</span>
-                  <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-mono">ULN2003</span>
+                <div className="flex items-center justify-between gap-1.5 flex-wrap font-semibold text-slate-800">
+                  <span className="truncate">28BYJ-48 Stepper Motor</span>
+                  <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-mono flex-shrink-0 whitespace-nowrap">ULN2003</span>
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Smart Blocker Curtain (M2 Physical Motion, M7 bounds)</p>
-                <div className="text-[10px] text-slate-400 mt-1 font-mono">RPi GPIO 5, 6, 13, 19 (IN1–IN4)</div>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono break-all sm:break-normal">RPi GPIO 5, 6, 13, 19 (IN1–IN4)</div>
               </div>
               <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
-                <div className="flex items-center justify-between font-semibold text-slate-800">
-                  <span>5V COB LED Task Lamp</span>
-                  <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-mono">PWM0</span>
+                <div className="flex items-center justify-between gap-1.5 flex-wrap font-semibold text-slate-800">
+                  <span className="truncate">5V COB LED Task Lamp</span>
+                  <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-mono flex-shrink-0 whitespace-nowrap">PWM0</span>
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Adaptive Illumination (Method 2 via ULN2003 Ch 5)</p>
-                <div className="text-[10px] text-slate-400 mt-1 font-mono">RPi GPIO 18 (IN5) → OUT5 to COB [-]</div>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono break-all sm:break-normal">RPi GPIO 18 (IN5) → OUT5 to COB [-]</div>
               </div>
             </div>
           </div>
 
           {/* Column 2: Compute & Microcontrollers */}
-          <div className="bg-[#F8FAFC] rounded-xl p-4 border border-slate-100 flex flex-col gap-3">
-            <div className="flex items-center gap-2 font-bold text-slate-700 uppercase tracking-wider text-[11px]">
-              <Server size={14} className="text-indigo-500" />
-              <span>Compute & Microcontrollers</span>
+          <div className="bg-[#F8FAFC] rounded-xl p-4 border border-slate-100 flex flex-col gap-3 min-w-0">
+            <div className="flex items-center gap-2 font-bold text-slate-700 uppercase tracking-wider text-[11px] min-w-0">
+              <Server size={14} className="text-indigo-500 flex-shrink-0" />
+              <span className="truncate">Compute & Microcontrollers</span>
             </div>
             <div className="flex flex-col gap-2.5">
               <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
-                <div className="flex items-center justify-between font-semibold text-slate-800">
-                  <span>Raspberry Pi 4 Model B</span>
-                  <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded font-mono">Edge AI</span>
+                <div className="flex items-center justify-between gap-1.5 flex-wrap font-semibold text-slate-800">
+                  <span className="truncate">Raspberry Pi 4 Model B</span>
+                  <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded font-mono flex-shrink-0 whitespace-nowrap">Edge AI</span>
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Central Gateway, Random Forest AI (M4), SQLite queue (E4)</p>
-                <div className="text-[10px] text-slate-400 mt-1 font-mono">Linux 1-Wire & Hardware PWM0</div>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono break-all sm:break-normal">Linux 1-Wire & Hardware PWM0</div>
               </div>
               <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
-                <div className="flex items-center justify-between font-semibold text-slate-800">
-                  <span>ESP32 DevKit V1 (Nodes 1 & 2)</span>
-                  <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded font-mono">FreeRTOS</span>
+                <div className="flex items-center justify-between gap-1.5 flex-wrap font-semibold text-slate-800">
+                  <span className="truncate">ESP32 DevKit V1 (Nodes 1 & 2)</span>
+                  <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded font-mono flex-shrink-0 whitespace-nowrap">FreeRTOS</span>
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Chair Node 1 (E2/E3 Deep Sleep) & Desk Node 2 (E1 Multitasking)</p>
-                <div className="text-[10px] text-slate-400 mt-1 font-mono">Wi-Fi MQTT Telemetry w/ Sequence Retry (E4)</div>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono break-all sm:break-normal">Wi-Fi MQTT Telemetry w/ Sequence Retry (E4)</div>
               </div>
             </div>
           </div>
 
           {/* Column 3: Circuit & Power Infrastructure */}
-          <div className="bg-[#F8FAFC] rounded-xl p-4 border border-slate-100 flex flex-col gap-3">
-            <div className="flex items-center gap-2 font-bold text-slate-700 uppercase tracking-wider text-[11px]">
-              <Layers size={14} className="text-emerald-500" />
-              <span>Circuit & Power Support</span>
+          <div className="bg-[#F8FAFC] rounded-xl p-4 border border-slate-100 flex flex-col gap-3 min-w-0">
+            <div className="flex items-center gap-2 font-bold text-slate-700 uppercase tracking-wider text-[11px] min-w-0">
+              <Layers size={14} className="text-emerald-500 flex-shrink-0" />
+              <span className="truncate">Circuit & Power Support</span>
             </div>
             <div className="flex flex-col gap-2.5">
               <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
-                <div className="flex items-center justify-between font-semibold text-slate-800">
-                  <span>Workstation 5V Power Rail</span>
-                  <span className="text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-mono">5V / GND</span>
+                <div className="flex items-center justify-between gap-1.5 flex-wrap font-semibold text-slate-800">
+                  <span className="truncate">Workstation 5V Power Rail</span>
+                  <span className="text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-mono flex-shrink-0 whitespace-nowrap">5V / GND</span>
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">Common Ground power bus for RPi, ESP32, Stepper & COB LED</p>
-                <div className="text-[10px] text-slate-400 mt-1 font-mono">Regulated 5V DC step-down power supply</div>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono break-all sm:break-normal">Regulated 5V DC step-down power supply</div>
               </div>
               <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
-                <div className="flex items-center justify-between font-semibold text-slate-800">
-                  <span>Protection & Resistor Dividers</span>
-                  <span className="text-[10px] bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded font-mono">Safety</span>
+                <div className="flex items-center justify-between gap-1.5 flex-wrap font-semibold text-slate-800">
+                  <span className="truncate">Protection & Resistor Dividers</span>
+                  <span className="text-[10px] bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded font-mono flex-shrink-0 whitespace-nowrap">Safety</span>
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">1kΩ/2kΩ HC-SR04 Echo divider (5V→3.3V) & 10kΩ FSR pull-down</p>
-                <div className="text-[10px] text-slate-400 mt-1 font-mono">Protects Pi GPIO & stabilizes seat wake interrupt</div>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono break-all sm:break-normal">Protects Pi GPIO & stabilizes seat wake interrupt</div>
               </div>
             </div>
           </div>
