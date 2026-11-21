@@ -102,7 +102,7 @@ CLASS_DEFINITIONS = {
     8: {
         "name": "THERMAL_DISCOMFORT",
         "action": "Curtain CLOSED (100%); Thermal draft shield deployed",
-        "advice": "Ambient temperature outside comfort standard (<20°C or >32°C). Adjust AC or take a rest.",
+        "advice": "Ambient temperature outside Thailand comfort standard (<22°C or >32°C). Adjust AC or fan.",
     },
 }
 
@@ -135,12 +135,12 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
 
     # -------------------------------------------------------------------------
     # Class 0: OPTIMAL_STUDY
-    # Ergonomic distance (35-55cm), proper lighting (350-700 Lux), 22-26°C, <48dB, <45min
+    # Ergonomic distance (35-55cm), proper lighting (350-700 Lux), 22-32°C (Thai comfort standard), <48dB, <45min
     # -------------------------------------------------------------------------
     presence_0 = np.ones(samples_per_class)
     dist_0 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
     lux_0 = rng.normal(loc=460.0, scale=60.0, size=samples_per_class).clip(320.0, 750.0)
-    temp_0 = rng.normal(loc=24.5, scale=1.2, size=samples_per_class).clip(21.5, 27.5)
+    temp_0 = rng.uniform(low=22.2, high=31.8, size=samples_per_class)
     sound_0 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(25.0, 48.0)
     dur_0 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
 
@@ -156,7 +156,7 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     presence_1 = np.ones(samples_per_class)
     dist_1 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
     lux_1 = rng.uniform(low=20.0, high=290.0, size=samples_per_class)
-    temp_1 = rng.normal(loc=24.5, scale=1.2, size=samples_per_class).clip(21.5, 27.5)
+    temp_1 = rng.uniform(low=22.2, high=31.8, size=samples_per_class)
     sound_1 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(25.0, 48.0)
     dur_1 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
 
@@ -172,7 +172,7 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     presence_2 = np.ones(samples_per_class)
     dist_2 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
     lux_2 = rng.uniform(low=760.0, high=2200.0, size=samples_per_class)
-    temp_2 = rng.normal(loc=24.5, scale=1.2, size=samples_per_class).clip(21.5, 27.5)
+    temp_2 = rng.uniform(low=22.2, high=31.8, size=samples_per_class)
     sound_2 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(25.0, 48.0)
     dur_2 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
 
@@ -252,7 +252,7 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     presence_7 = np.ones(samples_per_class)
     dist_7 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
     lux_7 = rng.normal(loc=460.0, scale=60.0, size=samples_per_class).clip(320.0, 750.0)
-    temp_7 = rng.normal(loc=24.5, scale=1.2, size=samples_per_class).clip(21.5, 27.5)
+    temp_7 = rng.uniform(low=22.2, high=31.8, size=samples_per_class)
     sound_7 = rng.uniform(low=68.0, high=92.0, size=samples_per_class)
     dur_7 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
 
@@ -263,13 +263,13 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
 
     # -------------------------------------------------------------------------
     # Class 8: THERMAL_DISCOMFORT
-    # Seated, Temp < 20°C (over-chilled AC) or > 32°C (heat stress) (DLPW/ASHRAE)
+    # Seated, Temp < 22°C (over-chilled AC) or > 32°C (heat stress) (Thai workplace comfort)
     # -------------------------------------------------------------------------
     presence_8 = np.ones(samples_per_class)
     dist_8 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
     lux_8 = rng.normal(loc=460.0, scale=60.0, size=samples_per_class).clip(320.0, 750.0)
     half = samples_per_class // 2
-    temp_cold = rng.uniform(low=14.0, high=19.8, size=half)
+    temp_cold = rng.uniform(low=14.0, high=21.8, size=half)
     temp_hot = rng.uniform(low=32.2, high=40.0, size=samples_per_class - half)
     temp_8 = np.concatenate([temp_cold, temp_hot])
     sound_8 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(25.0, 55.0)

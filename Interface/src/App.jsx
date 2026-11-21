@@ -626,12 +626,12 @@ export default function App() {
 
         {/* Card 5: Temperature */}
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
-          telemetry.temp > 28.0 || telemetry.temp < 20.0 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
+          telemetry.temp > 32.0 || telemetry.temp < 22.0 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
           <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
             <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg min-w-0">
               <div className={`p-2 rounded-lg border flex-shrink-0 ${
-                telemetry.temp > 28.0 || telemetry.temp < 20.0 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+                telemetry.temp > 32.0 || telemetry.temp < 22.0 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
               }`}>
                 <Thermometer size={20} />
               </div>
@@ -656,17 +656,17 @@ export default function App() {
 
           <div className="rounded-xl p-2.5 bg-[#F4F7F9] flex flex-col justify-center">
             <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase mb-1">
-              <span>Comfort: 22–26°C</span>
-              <span className={telemetry.temp > 28 ? 'text-rose-600' : 'text-slate-500'}>
-                {telemetry.temp > 28 ? 'Too Warm' : 'Comfort'}
+              <span>Comfort: 22–32°C</span>
+              <span className={telemetry.temp > 32.0 ? 'text-rose-600' : telemetry.temp < 22.0 ? 'text-cyan-600' : 'text-slate-500'}>
+                {telemetry.temp > 32.0 ? 'Too Warm' : telemetry.temp < 22.0 ? 'Too Cold' : 'Comfort'}
               </span>
             </div>
             <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
               <div 
                 className={`h-full rounded-full transition-all duration-500 ${
-                  telemetry.temp > 28 ? 'bg-rose-500' : 'bg-emerald-500'
+                  telemetry.temp > 32.0 ? 'bg-rose-500' : telemetry.temp < 22.0 ? 'bg-cyan-500' : 'bg-emerald-500'
                 }`}
-                style={{ width: `${Math.min(100, Math.max(10, ((telemetry.temp - 15) / 25) * 100))}%` }}
+                style={{ width: `${Math.min(100, Math.max(10, ((telemetry.temp - 18) / 20) * 100))}%` }}
               ></div>
             </div>
           </div>

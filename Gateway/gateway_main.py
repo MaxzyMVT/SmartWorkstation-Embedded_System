@@ -693,9 +693,9 @@ class Gateway:
         elif class_id == 7:      # NOISY_ENVIRONMENT (> 68 dB)
             self.curtain.command("CLOSED")  # Lower curtain to provide acoustic isolation
             self.alerts.notify(class_id, "Noise Alert", "High ambient noise (>68dB). Curtain deployed for acoustic shielding.")
-        elif class_id == 8:      # THERMAL_DISCOMFORT (< 20°C or > 32°C)
+        elif class_id == 8:      # THERMAL_DISCOMFORT (< 22°C or > 32°C)
             self.curtain.command("CLOSED")  # Lower curtain to shield from cold AC draft or heat
-            self.alerts.notify(class_id, "Thermal Discomfort", "Room temperature outside comfort range (<20°C or >32°C). Curtain closed.")
+            self.alerts.notify(class_id, "Thermal Discomfort", "Room temperature outside comfort range (<22°C or >32°C). Curtain closed.")
 
         if not seat:
             self.led_duty = min(self.led_duty, LED_IDLE_CAP_PCT)
