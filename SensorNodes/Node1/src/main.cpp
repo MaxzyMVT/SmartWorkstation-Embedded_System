@@ -88,6 +88,8 @@ void sleepIfVacant(esp_mqtt_client_handle_t client) {
   if (!due) return;
 
   ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, kSeatOccupiedLevel));
+  // Keep-alive timer: wake every 12 seconds for ~100ms pulse so standard USB power banks do not auto-shutdown
+  ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(12ULL * 1000000ULL));
   if (client) ESP_ERROR_CHECK(esp_mqtt_client_stop(client));
   WiFi.mode(WIFI_OFF);
 
@@ -115,12 +117,12 @@ void sleepIfVacant(esp_mqtt_client_handle_t client) {
   // External pull-down remains effective in RTC mode. Disable internal pulls.
   ESP_ERROR_CHECK(rtc_gpio_pullup_dis(GPIO_NUM_33));
   ESP_ERROR_CHECK(rtc_gpio_pulldown_dis(GPIO_NUM_33));
-  Serial.printf("Vacant >60 s: deep sleep, retained=%lu seq=%lu\n",
+  Serial.printf("Vacant >60 s: deep sleep (ext0 + 12s keepalive), retained=%lu seq=%lu\n",
                 static_cast<unsigned long>(checkpoint.count),
                 static_cast<unsigned long>(checkpoint.seq));
   Serial.flush();
   // Keep the mutex locked until reset to freeze producers/checkpoint state.
-  // A HIGH arriving after the final check causes immediate ext0 wake-up.
+  // A LOW arriving after the final check causes immediate ext0 wake-up.
   esp_deep_sleep_start();
 }
 
@@ -284,6 +286,31 @@ void vTaskTelemetrySend(void *) {
 } // namespace
 
 void setup() {
+  // If waking from periodic keep-alive timer, check if still vacant.
+  // If vacant, pulse the load briefly to keep power bank alive, then sleep again immediately (no Wi-Fi init).
+  if (esp_reset_reason() == ESP_RST_DEEPSLEEP &&
+      esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) {
+    ESP_ERROR_CHECK(rtc_gpio_deinit(GPIO_NUM_33));
+    pinMode(kSeatPin, INPUT_PULLUP);
+    delayMicroseconds(200); // allow pin state to stabilize
+    if (digitalRead(kSeatPin) == kSeatVacantLevel) {
+      // Chair is still unoccupied.
+      // Pulse onboard LED (GPIO 2) briefly to generate current consumption pulse for the power bank.
+      pinMode(2, OUTPUT);
+      digitalWrite(2, HIGH);
+      delay(80); // 80ms active load keeps power bank 5V boost converter energized
+      digitalWrite(2, LOW);
+
+      // Re-arm both ext0 (instant wake on sit) and 12s timer keep-alive, then sleep again
+      ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(GPIO_NUM_33, kSeatOccupiedLevel));
+      ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(12ULL * 1000000ULL));
+      ESP_ERROR_CHECK(rtc_gpio_pullup_dis(GPIO_NUM_33));
+      ESP_ERROR_CHECK(rtc_gpio_pulldown_dis(GPIO_NUM_33));
+      esp_deep_sleep_start();
+    }
+    // If seat was pressed during sleep or timer tick, proceed to full boot below!
+  }
+
   Serial.begin(115200);
   delay(500);
   Serial.println("\n==========================================");
@@ -302,13 +329,12 @@ void setup() {
   mqttEvents = xEventGroupCreate();
   if (!stateMutex || !telemetryWake || !edgeQueue || !telemetryQueue || !ackQueue || !mqttEvents) abort();
   if (esp_reset_reason() == ESP_RST_DEEPSLEEP &&
-      esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 &&
       checkpoint.magic == kRtcMagic && checkpoint.count <= kQueueCapacity) {
     sequence = checkpoint.seq;
     seat.sittingUs = checkpoint.sittingUs;
     for (uint32_t i = 0; i < checkpoint.count; ++i)
       if (xQueueSend(telemetryQueue, &checkpoint.packets[i], 0) != pdTRUE) abort();
-    Serial.printf("ext0 wake: restored=%lu seq=%lu\n", static_cast<unsigned long>(checkpoint.count),
+    Serial.printf("deep sleep wake: restored=%lu seq=%lu\n", static_cast<unsigned long>(checkpoint.count),
                   static_cast<unsigned long>(sequence));
   }
   checkpoint.magic = 0; // A fresh checkpoint is only valid after orderly sleep.
