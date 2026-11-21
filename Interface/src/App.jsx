@@ -10,7 +10,11 @@ import {
   AlertTriangle, 
   Cpu, 
   Activity,
-  Lock
+  Lock,
+  CircuitBoard,
+  Zap,
+  Server,
+  Layers
 } from 'lucide-react';
 import { subscribeToWorkstationTelemetry } from './telemetryService';
 
@@ -453,6 +457,104 @@ export default function App() {
         </div>
 
       </main>
+
+      {/* Hardware Components & Actuators BOM (Below Sensor Values) */}
+      <footer className="mt-2 bg-white rounded-2xl p-5 sm:p-6 shadow-sm border border-slate-100 flex flex-col gap-4">
+        <div className="flex items-center justify-between flex-wrap gap-2 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg border border-indigo-100">
+              <CircuitBoard size={20} />
+            </div>
+            <div>
+              <h3 className="font-bold text-base sm:text-lg text-slate-800">Hardware Components & Actuators</h3>
+              <p className="text-xs text-slate-500">Physical motion devices, compute nodes, and circuit interfaces beyond environmental sensors</p>
+            </div>
+          </div>
+          <span className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-600 rounded-full">
+            CEDT 2110356 BOM
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          {/* Column 1: Actuators (Requirement M2) */}
+          <div className="bg-[#F8FAFC] rounded-xl p-4 border border-slate-100 flex flex-col gap-3">
+            <div className="flex items-center gap-2 font-bold text-slate-700 uppercase tracking-wider text-[11px]">
+              <Zap size={14} className="text-amber-500" />
+              <span>Closed-Loop Actuators (M2)</span>
+            </div>
+            <div className="flex flex-col gap-2.5">
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
+                <div className="flex items-center justify-between font-semibold text-slate-800">
+                  <span>28BYJ-48 Stepper Motor</span>
+                  <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-mono">ULN2003</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">Smart Blocker Curtain (M2 Physical Motion, M7 bounds)</p>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono">RPi GPIO 5, 6, 13, 19 (IN1–IN4)</div>
+              </div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
+                <div className="flex items-center justify-between font-semibold text-slate-800">
+                  <span>5V COB LED Task Lamp</span>
+                  <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-mono">PWM0</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">Adaptive Illumination (Method 2 via ULN2003 Ch 5)</p>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono">RPi GPIO 18 (IN5) → OUT5 to COB [-]</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Column 2: Compute & Microcontrollers */}
+          <div className="bg-[#F8FAFC] rounded-xl p-4 border border-slate-100 flex flex-col gap-3">
+            <div className="flex items-center gap-2 font-bold text-slate-700 uppercase tracking-wider text-[11px]">
+              <Server size={14} className="text-indigo-500" />
+              <span>Compute & Microcontrollers</span>
+            </div>
+            <div className="flex flex-col gap-2.5">
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
+                <div className="flex items-center justify-between font-semibold text-slate-800">
+                  <span>Raspberry Pi 4 Model B</span>
+                  <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded font-mono">Edge AI</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">Central Gateway, Random Forest AI (M4), SQLite queue (E4)</p>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono">Linux 1-Wire & Hardware PWM0</div>
+              </div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
+                <div className="flex items-center justify-between font-semibold text-slate-800">
+                  <span>ESP32 DevKit V1 (Nodes 1 & 2)</span>
+                  <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded font-mono">FreeRTOS</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">Chair Node 1 (E2/E3 Deep Sleep) & Desk Node 2 (E1 Multitasking)</p>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono">Wi-Fi MQTT Telemetry w/ Sequence Retry (E4)</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Column 3: Circuit & Power Infrastructure */}
+          <div className="bg-[#F8FAFC] rounded-xl p-4 border border-slate-100 flex flex-col gap-3">
+            <div className="flex items-center gap-2 font-bold text-slate-700 uppercase tracking-wider text-[11px]">
+              <Layers size={14} className="text-emerald-500" />
+              <span>Circuit & Power Support</span>
+            </div>
+            <div className="flex flex-col gap-2.5">
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
+                <div className="flex items-center justify-between font-semibold text-slate-800">
+                  <span>Workstation 5V Power Rail</span>
+                  <span className="text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-mono">5V / GND</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">Common Ground power bus for RPi, ESP32, Stepper & COB LED</p>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono">Regulated 5V DC step-down power supply</div>
+              </div>
+              <div className="bg-white p-2.5 rounded-lg border border-slate-200/60 shadow-xs">
+                <div className="flex items-center justify-between font-semibold text-slate-800">
+                  <span>Protection & Resistor Dividers</span>
+                  <span className="text-[10px] bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded font-mono">Safety</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">1kΩ/2kΩ HC-SR04 Echo divider (5V→3.3V) & 10kΩ FSR pull-down</p>
+                <div className="text-[10px] text-slate-400 mt-1 font-mono">Protects Pi GPIO & stabilizes seat wake interrupt</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
