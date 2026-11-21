@@ -32,7 +32,11 @@ import logging
 import os
 import queue
 import signal
+import smtplib
 import sqlite3
+import ssl
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 import threading
 import time
 import urllib.error
@@ -342,22 +346,128 @@ class CurtainController(threading.Thread):
 
 
 # ----------------------------------------------------------------------------
-# Alerts (M6): Discord webhook + LINE Messaging API, non-blocking, per-class cooldown
+# Alerts & Notifications (M6): Discord Webhook + Periodic Study Summary Email
 # ----------------------------------------------------------------------------
 class AlertDispatcher:
     def __init__(self) -> None:
-        self.cooldown_s = float(os.getenv("ALERT_COOLDOWN_S", "300"))
+        self.cooldown_s = float(os.getenv("ALERT_COOLDOWN_S", "120"))
         self.discord_url = os.getenv("DISCORD_WEBHOOK_URL", "")
-        self.line_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
-        self.line_to = os.getenv("LINE_TO_USER_ID", "")
+        self.smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+        self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        self.smtp_user = os.getenv("SMTP_USER", "")
+        self.smtp_password = os.getenv("SMTP_PASSWORD", "")
+        self.email_to = os.getenv("REPORT_EMAIL_TO", "")
+        self.report_interval_s = float(os.getenv("REPORT_INTERVAL_MIN", "60")) * 60.0
+
         self._last_sent: Dict[int, float] = {}
-        self._q: "queue.Queue[Tuple[str, str]]" = queue.Queue(maxsize=50)
+        self._q: "queue.Queue[Tuple[str, str, Optional[int]]]" = queue.Queue(maxsize=50)
+
+        # Statistics accumulation for periodic email reports
+        self._stat_lock = threading.Lock()
+        self._study_seconds = 0.0
+        self._total_cycles = 0
+        self._dist_samples: List[float] = []
+        self._lux_samples: List[float] = []
+        self._temp_samples: List[float] = []
+        self._sound_samples: List[float] = []
+        self._break_count = 0
+        self._curtain_moves = 0
+        self._last_report_time = time.monotonic()
+
         self._worker = threading.Thread(target=self._run, daemon=True, name="alerts")
         self._worker.start()
-        log.info("Alerts: discord=%s line=%s cooldown=%.0fs",
-                 "on" if is_configured(self.discord_url) else "dry-run",
-                 "on" if is_configured(self.line_token) and is_configured(self.line_to) else "dry-run",
-                 self.cooldown_s)
+        log.info("Alerts: discord=%s email=%s cooldown=%.0fs report_interval=%.0fm",
+                 "on" if is_configured(self.discord_url) else "off",
+                 "on" if is_configured(self.smtp_user) and is_configured(self.smtp_password) else "off",
+                 self.cooldown_s, self.report_interval_s / 60.0)
+
+    def record_telemetry(self, seat: bool, dist: float, lux: float, temp: float, sound: float, break_triggered: bool = False, curtain_moved: bool = False) -> None:
+        with self._stat_lock:
+            self._total_cycles += 1
+            if seat:
+                self._study_seconds += 1.0
+            if dist < 200.0:
+                self._dist_samples.append(dist)
+            self._lux_samples.append(lux)
+            self._temp_samples.append(temp)
+            self._sound_samples.append(sound)
+            if break_triggered:
+                self._break_count += 1
+            if curtain_moved:
+                self._curtain_moves += 1
+
+            # Check if it's time to dispatch periodic summary email
+            if is_configured(self.smtp_user) and is_configured(self.smtp_password) and is_configured(self.email_to):
+                if time.monotonic() - self._last_report_time >= self.report_interval_s:
+                    self._dispatch_email_report()
+                    self._last_report_time = time.monotonic()
+
+    def _dispatch_email_report(self) -> None:
+        with self._stat_lock:
+            study_min = self._study_seconds / 60.0
+            avg_dist = (sum(self._dist_samples) / len(self._dist_samples)) if self._dist_samples else 45.0
+            avg_lux = (sum(self._lux_samples) / len(self._lux_samples)) if self._lux_samples else 450.0
+            avg_temp = (sum(self._temp_samples) / len(self._temp_samples)) if self._temp_samples else 25.0
+            avg_sound = (sum(self._sound_samples) / len(self._sound_samples)) if self._sound_samples else 40.0
+            breaks = self._break_count
+            curtain_acts = self._curtain_moves
+
+            # Reset window accumulators for next interval
+            self._dist_samples.clear()
+            self._lux_samples.clear()
+            self._temp_samples.clear()
+            self._sound_samples.clear()
+            self._break_count = 0
+            self._curtain_moves = 0
+
+        subject = f"📊 Smart Workstation Study Report ({time.strftime('%H:%M:%S')})"
+        html_body = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; background-color: #f8fafc; padding: 20px; color: #1e293b;">
+          <div style="max-width: 600px; margin: auto; background: #ffffff; border-radius: 12px; padding: 24px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+            <h2 style="color: #4f46e5; margin-top: 0;">Smart Workstation Periodic Summary</h2>
+            <p style="color: #64748b; font-size: 14px;">Course: 2110356 Embedded System (CEDT) | Automated Report</p>
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 16px 0;" />
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold;">⏱️ Active Seated Study Time:</td>
+                <td style="padding: 8px 0; text-align: right; color: #059669; font-weight: bold;">{study_min:.1f} minutes</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold;">📏 Average Ergonomic Distance:</td>
+                <td style="padding: 8px 0; text-align: right;">{avg_dist:.1f} cm ({'Optimal' if 35 <= avg_dist <= 55 else 'Needs attention'})</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold;">💡 Average Desk Illumination:</td>
+                <td style="padding: 8px 0; text-align: right;">{avg_lux:.1f} Lux (Target: 300–800 Lux)</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold;">🌡️ Average Temperature:</td>
+                <td style="padding: 8px 0; text-align: right;">{avg_temp:.1f} °C (Comfort: 22–32°C)</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold;">🔊 Average Noise Level:</td>
+                <td style="padding: 8px 0; text-align: right;">{avg_sound:.1f} dB ({'Quiet Focus' if avg_sound < 50 else 'Moderate Noise'})</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold;">☕ Mandatory Breaks Completed:</td>
+                <td style="padding: 8px 0; text-align: right;">{breaks} break(s)</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold;">🛡️ Curtain Interventions (M2):</td>
+                <td style="padding: 8px 0; text-align: right;">{curtain_acts} event(s)</td>
+              </tr>
+            </table>
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 16px 0;" />
+            <p style="font-size: 12px; color: #94a3b8; text-align: center; margin-bottom: 0;">
+              Live Web Dashboard: <a href="https://smartworkstation-5fdcf.web.app" style="color: #4f46e5; text-decoration: none;">smartworkstation-5fdcf.web.app</a>
+            </p>
+          </div>
+        </body>
+        </html>
+        """
+        # Queue email sending onto background worker thread
+        self._q.put_nowait(("__EMAIL_REPORT__", html_body, None))
 
     def notify(self, class_id: int, title: str, body: str) -> None:
         now = time.monotonic()
@@ -365,7 +475,7 @@ class AlertDispatcher:
             return
         self._last_sent[class_id] = now
         try:
-            self._q.put_nowait((title, body))
+            self._q.put_nowait((title, body, class_id))
         except queue.Full:
             log.warning("Alert queue full; dropping alert")
 
@@ -376,26 +486,80 @@ class AlertDispatcher:
         with urllib.request.urlopen(req, timeout=5) as resp:
             resp.read()
 
+    def _send_email(self, html_content: str) -> bool:
+        if not (self.smtp_user and self.smtp_password and self.email_to):
+            return False
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = f"📊 Smart Workstation Study Summary ({time.strftime('%Y-%m-%d %H:%M')})"
+            msg["From"] = f"Smart Workstation <{self.smtp_user}>"
+            msg["To"] = self.email_to
+            msg.attach(MIMEText(html_content, "html"))
+
+            context = ssl.create_default_context()
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=12) as server:
+                server.ehlo()
+                server.starttls(context=context)
+                server.ehlo()
+                server.login(self.smtp_user, self.smtp_password)
+                server.send_message(msg)
+            log.info("Hourly study report email sent successfully to %s", self.email_to)
+            return True
+        except Exception as e:
+            log.warning("Failed to send report email: %s", e)
+            return False
+
     def _run(self) -> None:
         while True:
-            title, body = self._q.get()
-            text = f"{title}\n{body}"
-            sent = False
+            title, body, class_id = self._q.get()
+
+            # Handle periodic email reports
+            if title == "__EMAIL_REPORT__":
+                self._send_email(body)
+                continue
+
+            # Handle Discord Webhook embeds
             if is_configured(self.discord_url):
+                # Pick appropriate embed color based on alert severity
+                color = 0x4f46e5  # Default Indigo
+                emoji = "ℹ️"
+                if class_id == 2:    # Glare Shield
+                    color = 0xf59e0b
+                    emoji = "🛡️"
+                elif class_id in (3, 4): # Posture alerts
+                    color = 0xf97316
+                    emoji = "⚠️"
+                elif class_id == 5:  # Break timer reached
+                    color = 0xef4444
+                    emoji = "☕"
+                elif class_id == 7:  # Noisy environment
+                    color = 0x8b5cf6
+                    emoji = "🔊"
+                elif class_id == 8:  # Thermal discomfort
+                    color = 0x06b6d4
+                    emoji = "🌡️"
+                elif class_id == 0:  # Break completed / Optimal
+                    color = 0x10b981
+                    emoji = "✅"
+
+                embed = {
+                    "title": f"{emoji} {title}",
+                    "description": body,
+                    "color": color,
+                    "fields": [
+                        {"name": "Trigger Reason", "value": f"AI Classification Class {class_id if class_id is not None else 0}", "inline": True},
+                        {"name": "Dashboard", "value": "[Open Web App](https://smartworkstation-5fdcf.web.app)", "inline": True}
+                    ],
+                    "footer": {"text": "CEDT 2110356 Smart Workstation • Gateway Notification"},
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }
+                payload = {"embeds": [embed]}
                 try:
-                    self._post(self.discord_url, {"content": f"**{title}**\n{body}"}, {})
-                    sent = True
+                    self._post(self.discord_url, payload, {})
+                    log.info("Discord alert sent: %s", title)
                 except (urllib.error.URLError, OSError) as exc:
                     log.warning("Discord alert failed: %s", exc)
-            if is_configured(self.line_token) and is_configured(self.line_to):
-                try:
-                    self._post("https://api.line.me/v2/bot/message/push",
-                               {"to": self.line_to, "messages": [{"type": "text", "text": text}]},
-                               {"Authorization": f"Bearer {self.line_token}"})
-                    sent = True
-                except (urllib.error.URLError, OSError) as exc:
-                    log.warning("LINE alert failed: %s", exc)
-            if not sent:
+            else:
                 log.info("[alert dry-run] %s | %s", title, body)
 
 
@@ -780,6 +944,18 @@ class Gateway:
         if changed and self._active_class != 0:
             info = CLASS_INFO[self._active_class]
             self.alerts.notify(self._active_class, f"Smart Workstation: {info['name']}", info["advice"])
+
+        # Feed statistics for periodic email reports
+        curtain_active = self.curtain.state in ("CLOSING", "OPENING")
+        self.alerts.record_telemetry(
+            seat=snap["seat"],
+            dist=distance,
+            lux=lux,
+            temp=self._temp_ema,
+            sound=self._sound_ema,
+            break_triggered=self._break_active,
+            curtain_moved=curtain_active
+        )
 
         now = time.time()
         payload = {
