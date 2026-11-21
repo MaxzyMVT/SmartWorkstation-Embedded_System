@@ -173,12 +173,18 @@ Physical mechanical motion device providing closed-loop intervention (lowers cur
 | **IN3** | **GPIO 13** | Physical Pin 33 | Stepper half-step coil phase 3 |
 | **IN4** | **GPIO 19** | Physical Pin 35 | Stepper half-step coil phase 4 |
 
-#### 2. Dynamic Task Lighting (5V High-CRI LED Bar)
+#### 2. Dynamic Task Lighting (5V COB LED Bar / Strip)
 Proportional closed-loop illumination control to maintain 450–550 Lux on the desk.
-- **GATE**: Connect to **GPIO 18 (Physical Pin 12, Hardware PWM0)** via a $100\Omega$ current-limiting resistor, with a $10\text{k}\Omega$ pull-down resistor to GND.
-- **SOURCE**: Connect to Power GND.
-- **DRAIN**: Connect to negative cathode of the 5V LED lamp.
-- **LED Positive (+)**: Connect to +5V rail.
+The COB LED plate features dual-voltage solder pads (`3V+`, `-`, `5V+`, `-`):
+- **Pad `5V+`**: Connect to the **+5V power supply rail** (contains the internal current-limiting resistor for 5V).
+- **Pad `-`**: Connect to the **DRAIN** of the N-Channel MOSFET (or ULN2003 collector channel).
+- **Pad `3V+`**: **LEAVE UNCONNECTED** (used only for 3V–3.7V battery supplies; connecting 5V here will overheat/burn out the LEDs).
+- **Control Circuit (N-Channel MOSFET e.g. IRLZ44N / 2N7000 / AO3400)**:
+  - **GATE**: Connect to **GPIO 18 (Physical Pin 12, Hardware PWM0)** via a $100\Omega$ current-limiting resistor, with a $10\text{k}\Omega$ pull-down resistor to GND.
+  - **SOURCE**: Connect to Power GND (Common Ground).
+  - **DRAIN**: Connect to the COB LED **`-`** pad.
+  - **5V+**: Connect to +5V rail.
+  *(Alternatively, an unused channel on the ULN2003 stepper board such as IN5/OUT5 can be used to sink current up to 500mA).*
 
 ---
 
