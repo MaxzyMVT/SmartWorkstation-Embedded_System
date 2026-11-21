@@ -58,15 +58,17 @@ void onMqttEvent(void *, esp_event_base_t, int32_t eventId, void *data) {
 
 // ----------------------------------------------------------------------------
 // KY-037 Microphone Calibration
+// Baseline room noise floor: ~65-75 p2p raw ADC units
+// Quiet study baseline: 36.0 dB; speaking/typing: 50-65 dB; clap/loud noise: 75-85 dB
 // ----------------------------------------------------------------------------
-constexpr float kKy037NoiseFloor = 10.0f;
-constexpr float kKy037BaseDb     = 35.0f;
-constexpr float kKy037Scale      = 22.0f;
+constexpr float kKy037NoiseFloor = 70.0f;
+constexpr float kKy037BaseDb     = 36.0f;
+constexpr float kKy037Scale      = 32.0f;
 
 void vTaskSoundSample(void *) {
   analogReadResolution(12);
   analogSetPinAttenuation(kSoundPin, ADC_11db);
-  float peakDb = 38.0f;
+  float peakDb = 36.0f;
   float peakAmp = 0.0f;
   uint32_t peakHoldUntil = 0;
   uint32_t ampHoldUntil = 0;
@@ -85,26 +87,29 @@ void vTaskSoundSample(void *) {
 
     const float amplitude = high > low ? static_cast<float>(high - low) : 0.0f;
 
-    float instDb = 35.0f;
-    if (amplitude > 0.0f) {
-      const float effectiveAmp = (amplitude > kKy037NoiseFloor) ? amplitude : kKy037NoiseFloor;
-      instDb = kKy037BaseDb + kKy037Scale * log10f(effectiveAmp / kKy037NoiseFloor);
+    float instDb = 36.0f;
+    if (amplitude > kKy037NoiseFloor) {
+      instDb = kKy037BaseDb + kKy037Scale * log10f(amplitude / kKy037NoiseFloor);
       if (instDb > 88.0f) instDb = 88.0f;
+    } else {
+      // Sub-threshold electrical jitter maps linearly between 34.0 and 36.5 dB
+      instDb = 34.0f + 2.5f * (amplitude / kKy037NoiseFloor);
     }
 
     const uint32_t nowMs = millis();
     if (instDb >= peakDb) {
       peakDb = instDb;
-      peakHoldUntil = nowMs + 1500;
+      peakHoldUntil = nowMs + 600; // Hold peak for 600ms (fast, responsive)
     } else if (nowMs >= peakHoldUntil) {
-      peakDb = (peakDb > 35.5f) ? (peakDb - 0.5f) : 35.0f;
+      // Quick decay back down to ambient quiet room level
+      peakDb = (peakDb > 37.0f) ? (peakDb - 2.0f) : 36.0f;
     }
 
     if (amplitude >= peakAmp) {
       peakAmp = amplitude;
-      ampHoldUntil = nowMs + 1500;
+      ampHoldUntil = nowMs + 600;
     } else if (nowMs >= ampHoldUntil) {
-      peakAmp = (peakAmp > 1.0f) ? (peakAmp * 0.90f) : 0.0f;
+      peakAmp = (peakAmp > 2.0f) ? (peakAmp * 0.70f) : 0.0f;
     }
 
     Reading reading{peakDb, peakAmp, lastSample, millis()};
