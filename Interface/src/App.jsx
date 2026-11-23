@@ -23,10 +23,10 @@ import { subscribeToWorkstationTelemetry } from './telemetryService';
 
 const RFC_STATES = {
   0: { name: 'Optimal Study', advice: 'Posture and study environment are optimal', type: 'optimal' },
-  1: { name: 'Low Light (<300 Lux)', advice: 'Workspace too dim! Boosting LED lamp to 100%', type: 'alert' },
+  1: { name: 'Low Light (<250 Lux)', advice: 'Workspace too dim! Boosting LED lamp to 100%', type: 'alert' },
   2: { name: 'Harsh Glare (>750 Lux)', advice: 'Harsh overhead glare! Lowering curtain glare shield to 17 cm (47%)', type: 'alert' },
   3: { name: 'Text Neck (Too Close)', advice: 'Head too close (<28cm)! Straighten neck and sit back', type: 'alert' },
-  4: { name: 'Slouching (Too Far)', advice: 'Slouching too far back (>65cm)! Align spine upright', type: 'alert' },
+  4: { name: 'Slouching (Too Far)', advice: 'Slouching too far back (>140cm)! Align spine upright', type: 'alert' },
   5: { name: 'Break Timer Reached', advice: '50-minute study interval reached! Stand up and rest your eyes', type: 'alert' },
   6: { name: 'Workstation Vacant (Away)', advice: 'Workstation vacant. Power saving active', type: 'idle' },
   7: { name: 'Noisy Environment (>68 dB)', advice: 'High acoustic disturbance! Lowering curtain for acoustic shielding', type: 'alert' },
@@ -47,8 +47,8 @@ export default function App() {
 
   const [telemetry, setTelemetry] = useState({
     seat: true,
-    distance: 42.5,
-    light: 450.0,
+    distance: 85.0,
+    light: 275.0,
     temp: 25.6,
     sound: 35.0,
     sitting_duration_min: 14.5,
@@ -530,12 +530,12 @@ export default function App() {
 
         {/* Card 3: Posture Distance */}
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
-          telemetry.distance < 30 || telemetry.distance > 70 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
+          telemetry.distance < 28 || telemetry.distance > 145 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
           <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
             <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg min-w-0">
               <div className={`p-2 rounded-lg border flex-shrink-0 ${
-                telemetry.distance < 30 || telemetry.distance > 70 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+                telemetry.distance < 28 || telemetry.distance > 145 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
               }`}>
                 <User size={20} />
               </div>
@@ -560,17 +560,17 @@ export default function App() {
 
           <div className="rounded-xl p-2.5 bg-[#F4F7F9] flex flex-col justify-center">
             <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase mb-1">
-              <span>Ergonomic Zone</span>
-              <span className={telemetry.distance < 30 ? 'text-rose-600' : 'text-slate-500'}>
-                {telemetry.distance < 30 ? 'Too Close' : 'Optimal'}
+              <span>Standard: 35–140 cm</span>
+              <span className={telemetry.distance < 28 ? 'text-rose-600' : telemetry.distance > 140 ? 'text-amber-600' : 'text-slate-500'}>
+                {telemetry.distance < 28 ? 'Too Close' : telemetry.distance > 140 ? 'Too Far' : 'Optimal'}
               </span>
             </div>
             <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
               <div 
                 className={`h-full rounded-full transition-all duration-500 ${
-                  telemetry.distance < 30 ? 'bg-rose-500' : 'bg-emerald-500'
+                  telemetry.distance < 28 || telemetry.distance > 140 ? 'bg-amber-500' : 'bg-emerald-500'
                 }`}
-                style={{ width: `${Math.min(100, Math.max(10, (telemetry.distance / 80) * 100))}%` }}
+                style={{ width: `${Math.min(100, Math.max(10, (telemetry.distance / 160) * 100))}%` }}
               ></div>
             </div>
           </div>
@@ -578,12 +578,12 @@ export default function App() {
 
         {/* Card 4: Ambient Light */}
         <div className={`rounded-2xl p-4 sm:p-5 border flex flex-col justify-between transition-colors shadow-sm min-h-[200px] sm:min-h-[220px] ${
-          telemetry.light < 300 || telemetry.light > 1000 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
+          telemetry.light < 250 || telemetry.light > 1000 ? 'bg-[#FFF0F2] border-[#FFCBD3]' : 'bg-white border-slate-100'
         }`}>
           <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
             <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg min-w-0">
               <div className={`p-2 rounded-lg border flex-shrink-0 ${
-                telemetry.light < 300 || telemetry.light > 1000 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
+                telemetry.light < 250 || telemetry.light > 1000 ? 'bg-[#FFF0F2] text-rose-500 border-[#FFCBD3]' : 'bg-[#E5FDEB] text-[#22C55E] border-green-200'
               }`}>
                 <Sun size={20} />
               </div>
@@ -608,15 +608,15 @@ export default function App() {
 
           <div className="rounded-xl p-2.5 bg-[#F4F7F9] flex flex-col justify-center">
             <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase mb-1">
-              <span>Standard: 300–800</span>
-              <span className={telemetry.light < 300 ? 'text-amber-600' : telemetry.light > 1000 ? 'text-rose-600' : 'text-slate-500'}>
-                {telemetry.light < 300 ? 'Dim' : telemetry.light > 1000 ? 'Glare' : 'Ideal'}
+              <span>Standard: 270–800 Lux</span>
+              <span className={telemetry.light < 250 ? 'text-amber-600' : telemetry.light > 1000 ? 'text-rose-600' : 'text-slate-500'}>
+                {telemetry.light < 250 ? 'Dim' : telemetry.light > 1000 ? 'Glare' : 'Ideal'}
               </span>
             </div>
             <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
               <div 
                 className={`h-full rounded-full transition-all duration-500 ${
-                  telemetry.light < 300 ? 'bg-amber-500' : telemetry.light > 1000 ? 'bg-rose-500' : 'bg-emerald-500'
+                  telemetry.light < 250 ? 'bg-amber-500' : telemetry.light > 1000 ? 'bg-rose-500' : 'bg-emerald-500'
                 }`}
                 style={{ width: `${Math.min(100, Math.max(5, (telemetry.light / 1200) * 100))}%` }}
               ></div>

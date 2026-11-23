@@ -165,7 +165,7 @@ class MockHardware(BaseHardware):
         self._led_duty: float = 0.0
         self._servo_angle: float = 85.0
         self._position: int = 0
-        self._base_lux: float = 480.0
+        self._base_lux: float = 240.0
         self._lock = threading.Lock()
         logger.info("Initialized MockHardware (Simulation Mode)")
 
@@ -174,8 +174,8 @@ class MockHardware(BaseHardware):
         return True
 
     def read_distance_cm(self) -> float:
-        # Normal reading distance: 38.0 to 45.0 cm with small jitter
-        return round(42.0 + random.uniform(-1.0, 1.0), 1)
+        # Normal reading distance: 75.0 to 95.0 cm (well within 35-140 cm ergonomic zone)
+        return round(85.0 + random.uniform(-2.0, 2.0), 1)
 
     def read_temp_c(self) -> Optional[float]:
         return round(24.5 + random.uniform(-0.2, 0.2), 1)
@@ -186,8 +186,8 @@ class MockHardware(BaseHardware):
             curtain_frac = max(0.0, min(1.0, self._position / float(CURTAIN_TRAVEL_STEPS)))
             shield_factor = max(0.15, 1.0 - (curtain_frac * 0.85))
             effective_base = self._base_lux * shield_factor
-            boost = (self._led_duty / 100.0) * 200.0
-            noise = random.uniform(-1.5, 1.5)
+            boost = (self._led_duty / 100.0) * 50.0
+            noise = random.uniform(-1.0, 1.0)
             return round(max(0.0, effective_base + boost + noise), 1)
 
     def has_limit_switch(self) -> bool:
@@ -360,19 +360,19 @@ class RPiHardware(BaseHardware):
           An Exponential Moving Average (EMA) filter smoothly transitions between levels
           with natural micro-jitter, avoiding abrupt step changes on the dashboard.
         """
-        raw_base: float = 480.0
+        raw_base: float = 240.0
         if self.pins.LDR_PIN >= 0:
             try:
                 is_dark = (GPIO.input(self.pins.LDR_PIN) == GPIO.HIGH)
-                raw_base = 180.0 if is_dark else 480.0
+                raw_base = 180.0 if is_dark else 240.0
             except Exception:
-                raw_base = 480.0
+                raw_base = 240.0
 
         with self._lock:
-            # Closed-loop: LED lamp illuminates the desk surface (+0 to +250 Lux)
-            led_boost = (self._led_duty / 100.0) * 250.0
-            # Natural micro-jitter for analog realism (+/- 2.5 Lux)
-            jitter = random.uniform(-2.5, 2.5)
+            # Closed-loop: LED lamp illuminates the desk surface (+0 to +50 Lux boost at 100%)
+            led_boost = (self._led_duty / 100.0) * 50.0
+            # Natural micro-jitter for analog realism (+/- 1.5 Lux)
+            jitter = random.uniform(-1.5, 1.5)
             target_lux = max(10.0, raw_base + led_boost + jitter)
 
             # Exponential Moving Average smoothing (alpha = 0.3)

@@ -447,11 +447,11 @@ class AlertDispatcher:
               </tr>
               <tr>
                 <td style="padding: 8px 0; font-weight: bold;">📏 Average Ergonomic Distance:</td>
-                <td style="padding: 8px 0; text-align: right;">{avg_dist:.1f} cm ({'Optimal' if 35 <= avg_dist <= 55 else 'Needs attention'})</td>
+                <td style="padding: 8px 0; text-align: right;">{avg_dist:.1f} cm ({'Optimal' if 35 <= avg_dist <= 140 else 'Needs attention'})</td>
               </tr>
               <tr>
                 <td style="padding: 8px 0; font-weight: bold;">💡 Average Desk Illumination:</td>
-                <td style="padding: 8px 0; text-align: right;">{avg_lux:.1f} Lux (Target: 300–800 Lux)</td>
+                <td style="padding: 8px 0; text-align: right;">{avg_lux:.1f} Lux (Target: 270–800 Lux)</td>
               </tr>
               <tr>
                 <td style="padding: 8px 0; font-weight: bold;">🌡️ Average Temperature:</td>
@@ -813,8 +813,8 @@ class Gateway:
             self._last_distance = d
         if lx is not None:
             self._last_lux = lx
-        return (self._last_distance if self._last_distance is not None else 100.0,
-                self._last_lux if self._last_lux is not None else 300.0)
+        return (self._last_distance if self._last_distance is not None else 85.0,
+                self._last_lux if self._last_lux is not None else 275.0)
 
     def _sitting_minutes(self, snap: Dict[str, Any]) -> float:
         if not snap["seat"]:
@@ -856,13 +856,13 @@ class Gateway:
                 self._glare_shield_until = None
                 self.curtain.command("OPEN")
 
-            # Closed-loop: gently regulate LED towards 450 Lux
-            curr_lux = self._last_lux if self._last_lux is not None else 450.0
-            if curr_lux < 380.0:
+            # Closed-loop: gently regulate LED towards ~270 Lux ergonomic baseline
+            curr_lux = self._last_lux if self._last_lux is not None else 275.0
+            if curr_lux < 255.0:
                 self.led_duty = min(100.0, self.led_duty + LED_STEP_PCT)
-            elif curr_lux > 520.0:
+            elif curr_lux > 310.0:
                 self.led_duty = max(0.0, self.led_duty - LED_STEP_PCT)
-        elif class_id == 1:      # LOW_LIGHT (< 300 Lux)
+        elif class_id == 1:      # LOW_LIGHT (< 250 Lux)
             self._glare_shield_until = None  # If room genuinely darkens, cancel glare shield
             self.curtain.command("OPEN")
             self.led_duty = min(100.0, self.led_duty + LED_STEP_PCT * 2)
@@ -874,9 +874,9 @@ class Gateway:
         elif class_id == 3:      # TEXT_NECK_TOO_CLOSE (< 28 cm)
             servo = SERVO_NUDGE_DEG
             self.alerts.notify(class_id, "Posture Alert", "Head too close (<28cm)! Straighten your neck and sit back.")
-        elif class_id == 4:      # SLOUCH_TOO_FAR (> 65 cm)
+        elif class_id == 4:      # SLOUCH_TOO_FAR (> 140 cm)
             servo = SERVO_NUDGE_DEG
-            self.alerts.notify(class_id, "Posture Alert", "Slouching too far back! Align your spine upright.")
+            self.alerts.notify(class_id, "Posture Alert", "Slouching too far back (>140cm)! Align your spine upright.")
         elif class_id == 5:      # BREAK_TIMER_REACHED (>= 50 min)
             self._glare_shield_until = None
             self.curtain.command("CLOSED")  # Complete physical barrier for break

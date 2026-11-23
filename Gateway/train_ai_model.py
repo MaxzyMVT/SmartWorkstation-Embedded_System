@@ -17,11 +17,11 @@ Feature Vector (6 Features):
     5: sitting_duration_min (Continuous sitting duration, minutes)
 
 Classes:
-    0: OPTIMAL_STUDY        - Posture (35-55cm) and lighting (350-700 Lux) are ergonomic
-    1: LOW_LIGHT            - Lux < 300 Lux (Workspace too dim; boost LED to 100%)
+    0: OPTIMAL_STUDY        - Posture (35-140cm) and lighting (260-700 Lux) are ergonomic
+    1: LOW_LIGHT            - Lux < 250 Lux (Workspace too dim; boost LED to 100%)
     2: HARSH_GLARE          - Lux > 750 Lux (Excess ambient glare; lower curtain shield to 17cm / 47%, turn off LED)
     3: TEXT_NECK_TOO_CLOSE  - Distance < 28cm (Head too close to book/screen; posture warning)
-    4: SLOUCH_TOO_FAR       - Distance > 65cm while seated (Slouching excessively backward)
+    4: SLOUCH_TOO_FAR       - Distance > 145cm while seated (Slouching excessively backward)
     5: BREAK_TIMER_REACHED  - Duration >= 50 min (Prolonged study; close curtain 100% for break)
     6: AWAY                 - Presence == 0 (User left desk; curtain open, LED 0% standby)
 """
@@ -61,13 +61,13 @@ FEATURE_NAMES = [
 CLASS_DEFINITIONS = {
     0: {
         "name": "OPTIMAL_STUDY",
-        "action": "Curtain OPEN (0%); Closed-loop LED ~450 Lux; Normal ergonomics",
+        "action": "Curtain OPEN (0%); Closed-loop LED ~270 Lux; Normal ergonomics",
         "advice": "Posture and study environment are optimal. Keep it up!",
     },
     1: {
         "name": "LOW_LIGHT",
         "action": "Curtain OPEN (0%); Boost LED PWM to 100% to illuminate workspace",
-        "advice": "Workspace too dark (<300 Lux). Boosting desk lighting to 100%.",
+        "advice": "Workspace too dark (<250 Lux). Boosting desk lighting to 100%.",
     },
     2: {
         "name": "HARSH_GLARE",
@@ -82,7 +82,7 @@ CLASS_DEFINITIONS = {
     4: {
         "name": "SLOUCH_TOO_FAR",
         "action": "Trigger posture warning alert; Prompt user to sit upright",
-        "advice": "Slouching too far back (>65cm)! Align your spine upright.",
+        "advice": "Slouching too far back (>140cm)! Align your spine upright.",
     },
     5: {
         "name": "BREAK_TIMER_REACHED",
@@ -135,11 +135,11 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
 
     # -------------------------------------------------------------------------
     # Class 0: OPTIMAL_STUDY
-    # Ergonomic distance (35-55cm), proper lighting (350-700 Lux), 22-32°C (Thai comfort standard), <48dB, <45min
+    # Ergonomic distance (35-140cm), proper lighting (260-700 Lux), 22-32°C (Thai comfort standard), <48dB, <45min
     # -------------------------------------------------------------------------
     presence_0 = np.ones(samples_per_class)
-    dist_0 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
-    lux_0 = rng.normal(loc=460.0, scale=60.0, size=samples_per_class).clip(320.0, 750.0)
+    dist_0 = rng.uniform(low=35.0, high=140.0, size=samples_per_class)
+    lux_0 = rng.uniform(low=260.0, high=700.0, size=samples_per_class)
     temp_0 = rng.uniform(low=22.2, high=31.8, size=samples_per_class)
     sound_0 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(25.0, 48.0)
     dur_0 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
@@ -151,11 +151,11 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
 
     # -------------------------------------------------------------------------
     # Class 1: LOW_LIGHT
-    # Workspace illumination < 300 Lux (Too dim for ergonomic study)
+    # Workspace illumination < 250 Lux (Too dim for ergonomic study)
     # -------------------------------------------------------------------------
     presence_1 = np.ones(samples_per_class)
-    dist_1 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
-    lux_1 = rng.uniform(low=20.0, high=290.0, size=samples_per_class)
+    dist_1 = rng.uniform(low=35.0, high=140.0, size=samples_per_class)
+    lux_1 = rng.uniform(low=20.0, high=245.0, size=samples_per_class)
     temp_1 = rng.uniform(low=22.2, high=31.8, size=samples_per_class)
     sound_1 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(25.0, 48.0)
     dur_1 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
@@ -170,7 +170,7 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     # Ambient illumination > 750 Lux (Harsh overhead glare / window reflection)
     # -------------------------------------------------------------------------
     presence_2 = np.ones(samples_per_class)
-    dist_2 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
+    dist_2 = rng.uniform(low=35.0, high=140.0, size=samples_per_class)
     lux_2 = rng.uniform(low=760.0, high=2200.0, size=samples_per_class)
     temp_2 = rng.uniform(low=22.2, high=31.8, size=samples_per_class)
     sound_2 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(25.0, 48.0)
@@ -187,7 +187,7 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     # -------------------------------------------------------------------------
     presence_3 = np.ones(samples_per_class)
     dist_3 = rng.uniform(low=10.0, high=27.5, size=samples_per_class)
-    lux_3 = rng.normal(loc=450.0, scale=60.0, size=samples_per_class).clip(320.0, 720.0)
+    lux_3 = rng.uniform(low=260.0, high=700.0, size=samples_per_class)
     temp_3 = rng.normal(loc=24.5, scale=1.5, size=samples_per_class).clip(21.0, 28.0)
     sound_3 = rng.normal(loc=37.0, scale=5.0, size=samples_per_class).clip(28.0, 52.0)
     dur_3 = rng.uniform(low=1.0, high=48.0, size=samples_per_class)
@@ -199,11 +199,11 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
 
     # -------------------------------------------------------------------------
     # Class 4: SLOUCH_TOO_FAR
-    # Distance > 65cm (Slouching excessively backward)
+    # Distance > 140cm (Slouching excessively backward)
     # -------------------------------------------------------------------------
     presence_4 = np.ones(samples_per_class)
-    dist_4 = rng.uniform(low=66.0, high=110.0, size=samples_per_class)
-    lux_4 = rng.normal(loc=450.0, scale=60.0, size=samples_per_class).clip(320.0, 720.0)
+    dist_4 = rng.uniform(low=145.0, high=210.0, size=samples_per_class)
+    lux_4 = rng.uniform(low=260.0, high=700.0, size=samples_per_class)
     temp_4 = rng.normal(loc=24.8, scale=1.4, size=samples_per_class).clip(21.0, 28.5)
     sound_4 = rng.normal(loc=38.0, scale=5.0, size=samples_per_class).clip(28.0, 54.0)
     dur_4 = rng.uniform(low=1.0, high=48.0, size=samples_per_class)
@@ -218,8 +218,8 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     # Duration >= 50 minutes (Continuous prolonged sitting study)
     # -------------------------------------------------------------------------
     presence_5 = np.ones(samples_per_class)
-    dist_5 = rng.normal(loc=45.0, scale=5.0, size=samples_per_class).clip(30.0, 62.0)
-    lux_5 = rng.normal(loc=450.0, scale=60.0, size=samples_per_class).clip(300.0, 750.0)
+    dist_5 = rng.uniform(low=35.0, high=140.0, size=samples_per_class)
+    lux_5 = rng.uniform(low=260.0, high=700.0, size=samples_per_class)
     temp_5 = rng.normal(loc=24.5, scale=1.5, size=samples_per_class).clip(21.0, 28.5)
     sound_5 = rng.normal(loc=36.0, scale=4.0, size=samples_per_class).clip(26.0, 50.0)
     dur_5 = rng.uniform(low=50.0, high=120.0, size=samples_per_class)
@@ -234,7 +234,7 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     # Presence == 0 (User left desk)
     # -------------------------------------------------------------------------
     presence_6 = np.zeros(samples_per_class)
-    dist_6 = rng.uniform(low=70.0, high=250.0, size=samples_per_class)  # Background reflections
+    dist_6 = rng.uniform(low=150.0, high=300.0, size=samples_per_class)  # Background reflections
     lux_6 = rng.uniform(low=50.0, high=800.0, size=samples_per_class)
     temp_6 = rng.normal(loc=25.0, scale=2.0, size=samples_per_class).clip(20.0, 32.0)
     sound_6 = rng.normal(loc=34.0, scale=6.0, size=samples_per_class).clip(22.0, 65.0)
@@ -250,8 +250,8 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     # Sustained noise > 68 dB while seated (Thai/WHO acoustic disruption standard)
     # -------------------------------------------------------------------------
     presence_7 = np.ones(samples_per_class)
-    dist_7 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
-    lux_7 = rng.normal(loc=460.0, scale=60.0, size=samples_per_class).clip(320.0, 750.0)
+    dist_7 = rng.uniform(low=35.0, high=140.0, size=samples_per_class)
+    lux_7 = rng.uniform(low=260.0, high=700.0, size=samples_per_class)
     temp_7 = rng.uniform(low=22.2, high=31.8, size=samples_per_class)
     sound_7 = rng.uniform(low=68.0, high=92.0, size=samples_per_class)
     dur_7 = rng.uniform(low=0.5, high=45.0, size=samples_per_class)
@@ -266,8 +266,8 @@ def generate_synthetic_workstation_data(samples_per_class: int = 1500, random_st
     # Seated, Temp < 22°C (over-chilled AC) or > 32°C (heat stress) (Thai workplace comfort)
     # -------------------------------------------------------------------------
     presence_8 = np.ones(samples_per_class)
-    dist_8 = rng.normal(loc=45.0, scale=4.5, size=samples_per_class).clip(34.0, 58.0)
-    lux_8 = rng.normal(loc=460.0, scale=60.0, size=samples_per_class).clip(320.0, 750.0)
+    dist_8 = rng.uniform(low=35.0, high=140.0, size=samples_per_class)
+    lux_8 = rng.uniform(low=260.0, high=700.0, size=samples_per_class)
     half = samples_per_class // 2
     temp_cold = rng.uniform(low=14.0, high=21.8, size=half)
     temp_hot = rng.uniform(low=32.2, high=40.0, size=samples_per_class - half)
@@ -455,13 +455,14 @@ if __name__ == "__main__":
 
     # Test cases
     test_cases = [
-        {"name": "Ergonomic study", "features": (1, 45.0, 450.0, 24.5, 35.0, 20.0)},
-        {"name": "Text neck (slouching forward)", "features": (1, 20.0, 450.0, 24.5, 35.0, 20.0)},
-        {"name": "Slouching too far back", "features": (1, 80.0, 450.0, 24.5, 35.0, 20.0)},
-        {"name": "Dark room (<300 Lux)", "features": (1, 45.0, 80.0, 24.5, 35.0, 20.0)},
-        {"name": "Harsh glare room (>750 Lux)", "features": (1, 45.0, 1100.0, 24.5, 35.0, 20.0)},
-        {"name": "Break timer elapsed (55 min)", "features": (1, 45.0, 450.0, 24.5, 35.0, 55.0)},
-        {"name": "User away", "features": (0, 150.0, 300.0, 25.0, 35.0, 0.0)},
+        {"name": "Ergonomic study (close)", "features": (1, 45.0, 320.0, 24.5, 35.0, 20.0)},
+        {"name": "Ergonomic study (normal sitting 120cm, 275 Lux)", "features": (1, 120.0, 275.0, 24.5, 35.0, 20.0)},
+        {"name": "Text neck (slouching forward)", "features": (1, 20.0, 320.0, 24.5, 35.0, 20.0)},
+        {"name": "Slouching too far back (>140cm)", "features": (1, 160.0, 320.0, 24.5, 35.0, 20.0)},
+        {"name": "Dark room (<250 Lux)", "features": (1, 85.0, 80.0, 24.5, 35.0, 20.0)},
+        {"name": "Harsh glare room (>750 Lux)", "features": (1, 85.0, 1100.0, 24.5, 35.0, 20.0)},
+        {"name": "Break timer elapsed (55 min)", "features": (1, 85.0, 320.0, 24.5, 35.0, 55.0)},
+        {"name": "User away", "features": (0, 180.0, 300.0, 25.0, 35.0, 0.0)},
     ]
 
     print("\nInference Verification Results:")
