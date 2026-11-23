@@ -48,6 +48,7 @@ CURTAIN_TRAVEL_STEPS: int = int(os.getenv("CURTAIN_TRAVEL_STEPS", "4096"))
 CURTAIN_CLOSED_CM: float = float(os.getenv("CURTAIN_CLOSED_CM", "36.0"))
 CURTAIN_GLARE_CM: float = float(os.getenv("CURTAIN_GLARE_CM", "17.0"))
 CURTAIN_GLARE_RATIO: float = (CURTAIN_GLARE_CM / CURTAIN_CLOSED_CM) if CURTAIN_CLOSED_CM > 0 else (17.0 / 36.0)
+STEPPER_DELAY_S: float = float(os.getenv("STEPPER_DELAY_S", "0.0012"))  # delay per half-step (0.0010 - 0.0020 s)
 
 # Check for RPi.GPIO availability
 _CAN_IMPORT_RPI = False

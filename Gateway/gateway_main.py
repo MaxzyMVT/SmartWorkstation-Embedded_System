@@ -56,6 +56,7 @@ from hardware_interface import (
     CURTAIN_GLARE_CM,
     CURTAIN_GLARE_RATIO,
     CURTAIN_TRAVEL_STEPS,
+    STEPPER_DELAY_S,
     BaseHardware,
     create_hardware,
 )
@@ -75,7 +76,7 @@ SERVO_NUDGE_DEG = 110.0   # posture: tilt monitor arm / lamp toward the user
 SERVO_BREAK_DEG = 60.0    # break prompt: visible physical movement
 LED_STEP_PCT = 15.0       # closed-loop LED ramp per control cycle
 LED_IDLE_CAP_PCT = 20.0   # energy saving when the chair is empty
-STEPPER_DELAY_S = 0.002   # ~500 half-steps/s, safe for a 28BYJ-48
+# STEPPER_DELAY_S is imported from hardware_interface (defaults to 0.0012s, overridable via STEPPER_DELAY_S in .env)
 DEFAULT_TEMP_C, DEFAULT_SOUND_DB = 24.0, 35.0  # only used before node2 ever reports
 
 
