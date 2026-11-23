@@ -49,6 +49,7 @@ CURTAIN_CLOSED_CM: float = float(os.getenv("CURTAIN_CLOSED_CM", "36.0"))
 CURTAIN_GLARE_CM: float = float(os.getenv("CURTAIN_GLARE_CM", "17.0"))
 CURTAIN_GLARE_RATIO: float = (CURTAIN_GLARE_CM / CURTAIN_CLOSED_CM) if CURTAIN_CLOSED_CM > 0 else (17.0 / 36.0)
 STEPPER_DELAY_S: float = float(os.getenv("STEPPER_DELAY_S", "0.0012"))  # delay per half-step (0.0010 - 0.0020 s)
+LED_PWM_FREQ_HZ: int = int(os.getenv("LED_PWM_FREQ_HZ", "200"))        # 200 Hz default (jitter-free on RPi.GPIO)
 
 # Check for RPi.GPIO availability
 _CAN_IMPORT_RPI = False
@@ -142,6 +143,10 @@ class BaseHardware(abc.ABC):
         """Sets the LED light bar PWM duty cycle (0.0% to 100.0%)."""
         ...
 
+    def set_led_freq(self, freq_hz: int) -> None:
+        """Sets the LED PWM frequency in Hz (defaults to 200 Hz)."""
+        pass
+
     @abc.abstractmethod
     def set_servo_angle(self, angle_deg: float) -> None:
         """Stub for backward compatibility with telemetry schema."""
@@ -205,6 +210,10 @@ class MockHardware(BaseHardware):
         with self._lock:
             self._led_duty = max(0.0, min(100.0, float(duty_pct)))
 
+    def set_led_freq(self, freq_hz: int) -> None:
+        with self._lock:
+            self._led_freq = max(10, min(10000, freq_hz))
+
     def set_servo_angle(self, angle_deg: float) -> None:
         with self._lock:
             self._servo_angle = max(0.0, min(180.0, float(angle_deg)))
@@ -257,9 +266,9 @@ class RPiHardware(BaseHardware):
         for pin in (self.pins.STEPPER_IN1, self.pins.STEPPER_IN2, self.pins.STEPPER_IN3, self.pins.STEPPER_IN4):
             GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
 
-        # 4. LED PWM (1000 Hz)
+        # 4. LED PWM (defaults to 200 Hz to prevent RPi.GPIO software PWM jitter)
         GPIO.setup(self.pins.LED_PWM_PIN, GPIO.OUT, initial=GPIO.LOW)
-        self._led_pwm = GPIO.PWM(self.pins.LED_PWM_PIN, 1000)
+        self._led_pwm = GPIO.PWM(self.pins.LED_PWM_PIN, LED_PWM_FREQ_HZ)
         self._led_pwm.start(0.0)
 
     def read_distance_cm(self) -> float:
@@ -401,6 +410,10 @@ class RPiHardware(BaseHardware):
         self._led_duty = round(duty_pct, 1)
         if self._led_pwm is not None:
             self._led_pwm.ChangeDutyCycle(self._led_duty)
+
+    def set_led_freq(self, freq_hz: int) -> None:
+        if self._led_pwm is not None:
+            self._led_pwm.ChangeFrequency(max(10, min(10000, freq_hz)))
 
     def set_servo_angle(self, angle_deg: float) -> None:
         self._servo_angle = round(angle_deg, 1)
