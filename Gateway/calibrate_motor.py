@@ -48,6 +48,25 @@ from hardware_interface import (
 )
 
 
+def check_background_service() -> bool:
+    """Checks if the background smartworkstation daemon is currently running on Linux/Pi."""
+    if sys.platform.startswith("linux"):
+        import subprocess
+        try:
+            res = subprocess.run(
+                ["systemctl", "is-active", "smartworkstation"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=2,
+            )
+            if res.stdout.strip() == "active":
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def move_steps(hw: BaseHardware, steps: int, delay: float) -> None:
     direction = 1 if steps > 0 else -1
     count = abs(steps)
@@ -118,6 +137,15 @@ def main() -> None:
     print(f"  Current Config:  CURTAIN_TRAVEL_STEPS = {total_travel_steps} half-steps")
     print(f"  Current Speed:   STEPPER_DELAY_S = {current_delay:.4f} s (~{1/current_delay:.0f} steps/s)")
     print("=" * 70)
+
+    if not mock_mode and check_background_service():
+        print("\n" + "!" * 70)
+        print("  [WARNING] 'smartworkstation' service is currently running in background!")
+        print("  It controls GPIO 5, 6, 13, 19 and will interrupt / cancel motor steps.")
+        print("  Please stop it in another terminal to avoid pin conflicts:")
+        print("      sudo systemctl stop smartworkstation")
+        print("!" * 70 + "\n")
+
     print("Commands:")
     print("  +N / -N      : Step down (+) or up (-) by N steps (e.g., +500, -100)")
     print("  d / u        : Quick step down (+500) or up (-500)")
@@ -163,28 +191,61 @@ def main() -> None:
             elif cmd.startswith("speed"):
                 parts = cmd.split()
                 if len(parts) < 2:
-                    print(f"Current speed: {current_delay:.4f} s/step (~{speed_hz:.0f} steps/s)")
-                    print("Usage: speed <seconds> (e.g. 0.0010, 0.0012, 0.0015, 0.0020)")
-                    print("       speed turbo | speed fast | speed normal | speed slow")
+                    print(f"Current step delay: {current_delay:.4f} s/step (~{speed_hz:.0f} steps/s)")
+                    print("Usage:")
+                    print("  speed turbo   : 0.0010 s (~1000 steps/s, maximum safe speed)")
+                    print("  speed fast    : 0.0012 s (~833 steps/s, recommended fast & reliable)")
+                    print("  speed normal  : 0.0015 s (~667 steps/s, smooth balanced)")
+                    print("  speed slow    : 0.0020 s (~500 steps/s, conservative default)")
+                    print("  speed <sec>   : Custom delay in seconds (e.g. 0.0012)")
+                    print("  speed <hz>hz  : Target frequency (e.g. speed 1000hz, speed 800hz)")
+                    print("\n[NOTE] Delay is SECONDS PER STEP. Smaller number = FASTER motor!")
                     continue
-                val = parts[1]
+
+                val = parts[1].lower()
                 presets = {
-                    "turbo": 0.0010,   # ~1000 steps/s (2x speed)
-                    "fast": 0.0012,    # ~833 steps/s (fast & reliable)
+                    "turbo": 0.0010,   # ~1000 steps/s (maximum reliable speed for 28BYJ-48 at 5V)
+                    "fast": 0.0012,    # ~833 steps/s (fast & high torque - recommended)
                     "normal": 0.0015,  # ~667 steps/s (balanced)
                     "slow": 0.0020,    # ~500 steps/s (conservative stock)
                 }
+
                 new_delay = None
                 if val in presets:
                     new_delay = presets[val]
+                elif val.endswith("hz"):
+                    try:
+                        target_hz = float(val[:-2])
+                        if target_hz <= 0:
+                            print("[!] Frequency must be positive.")
+                            continue
+                        parsed = 1.0 / target_hz
+                        if parsed < 0.0009:
+                            print(f"[!] DANGER: {target_hz:.0f} Hz is TOO FAST for the 28BYJ-48 motor.")
+                            print("    Without an acceleration curve, the rotor will stall and freeze.")
+                            print("    Maximum safe starting frequency is ~1000 Hz ('speed turbo').")
+                            continue
+                        new_delay = parsed
+                    except ValueError:
+                        print(f"[!] Invalid frequency: {val}")
+                        continue
                 else:
                     try:
                         parsed = float(val)
-                        if 0.0005 <= parsed <= 0.0100:
+                        if parsed < 0.0009:
+                            print(f"[!] DANGER: {parsed:.4f}s (~{1.0/parsed:.0f} steps/s) is TOO FAST for 28BYJ-48!")
+                            print("    The stepper rotor will STALL (freeze with faint buzzing) due to physical inertia.")
+                            print("    The maximum safe speed for starting without ramping is 0.0010s (~1000 steps/s).")
+                            continue
+                        elif parsed > 0.0030:
+                            print(f"[!] NOTICE: {parsed:.4f}s delay makes the motor SLOWER, not faster!")
+                            print(f"    At {parsed:.4f}s, speed is only ~{1.0/parsed:.0f} steps/s.")
+                            print("    Because 28BYJ-48 has a 64:1 reduction gearbox (4096 steps/rev),")
+                            print("    a move of 500 steps turns only 44 degrees (<0.8 cm travel) and takes multiple seconds.")
+                            print("    To make the motor FASTER, use a SMALLER delay: 'speed fast' (0.0012) or 'speed turbo' (0.0010).")
                             new_delay = parsed
                         else:
-                            print("[!] Recommended delay is between 0.0008s and 0.0050s.")
-                            continue
+                            new_delay = parsed
                     except ValueError:
                         print(f"[!] Invalid speed value: {val}")
                         continue
@@ -193,7 +254,7 @@ def main() -> None:
                     current_delay = new_delay
                     new_hz = 1.0 / current_delay
                     print(f"[OK] Speed updated to {current_delay:.4f} s/step (~{new_hz:.0f} steps/s).")
-                    print("     Type 'save' to make this the permanent default in Gateway/.env")
+                    print("     Type 'save' to commit to Gateway/.env")
 
             elif cmd in ("d", "down"):
                 print(f"Moving DOWN (+500 steps @ {current_delay*1000:.1f}ms)...")

@@ -37,6 +37,25 @@ if ENV_PATH.exists():
 from hardware_interface import BaseHardware, LED_PWM_FREQ_HZ, create_hardware
 
 
+def check_background_service() -> bool:
+    """Checks if the background smartworkstation daemon is currently running on Linux/Pi."""
+    if sys.platform.startswith("linux"):
+        import subprocess
+        try:
+            res = subprocess.run(
+                ["systemctl", "is-active", "smartworkstation"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=2,
+            )
+            if res.stdout.strip() == "active":
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def update_env_file(freq_hz: int) -> None:
     env_file = Path(__file__).resolve().parent / ".env"
     if not env_file.exists():
@@ -131,6 +150,15 @@ def main() -> None:
     print(f"  PWM Frequency:   {current_freq} Hz (200 Hz recommended for jitter-free dimming)")
     print("  Driver Path:     ULN2003 Channel 5 (IN5/OUT5) or MOSFET Gate")
     print("=" * 70)
+
+    if not mock_mode and check_background_service():
+        print("\n" + "!" * 70)
+        print("  [WARNING] 'smartworkstation' service is currently running in background!")
+        print("  It continuously updates PWM duty cycle and will cause flicker or override tests.")
+        print("  Please stop it before manual calibration:")
+        print("      sudo systemctl stop smartworkstation")
+        print("!" * 70 + "\n")
+
     print("  Troubleshooting Flicker Tips:")
     print("    1. Stop background daemon:  sudo systemctl stop smartworkstation")
     print("    2. Ensure solid Common GND between Pi Pin 6/14/30 and ULN2003 / 5V GND rail")
