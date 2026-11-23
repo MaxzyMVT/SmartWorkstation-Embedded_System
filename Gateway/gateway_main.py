@@ -733,6 +733,10 @@ class Gateway:
         self._break_active = False
         self._break_remaining_s = 0
 
+        # Glare shield hysteresis hold (prevents motor oscillation when curtain shades the sensor)
+        self.glare_hold_s = float(os.getenv("GLARE_HOLD_S", "180"))  # Hold shield for 3 minutes
+        self._glare_shield_until: Optional[float] = None
+
         self.mqtt_connected = threading.Event()
         self.mqtt = self._make_mqtt()
 
@@ -827,8 +831,19 @@ class Gateway:
     def _actuate(self, class_id: int, seat: bool) -> None:
         """Class -> actuator mapping. The class itself comes from the trained model."""
         servo = SERVO_REST_DEG
+        now_mono = time.monotonic()
+
+        # If glare shield is currently latched under hysteresis hold, prevent reopening
+        glare_held = (self._glare_shield_until is not None and now_mono < self._glare_shield_until)
+
         if class_id == 0:        # OPTIMAL_STUDY
-            self.curtain.command("OPEN")
+            if glare_held:
+                # Maintain glare shield during hold window; do not flap curtain back open
+                self.curtain.command("GLARE_SHIELD")
+            else:
+                self._glare_shield_until = None
+                self.curtain.command("OPEN")
+
             # Closed-loop: gently regulate LED towards 450 Lux
             curr_lux = self._last_lux if self._last_lux is not None else 450.0
             if curr_lux < 380.0:
@@ -836,9 +851,12 @@ class Gateway:
             elif curr_lux > 520.0:
                 self.led_duty = max(0.0, self.led_duty - LED_STEP_PCT)
         elif class_id == 1:      # LOW_LIGHT (< 300 Lux)
+            self._glare_shield_until = None  # If room genuinely darkens, cancel glare shield
             self.curtain.command("OPEN")
             self.led_duty = min(100.0, self.led_duty + LED_STEP_PCT * 2)
         elif class_id == 2:      # HARSH_GLARE (> 750 Lux)
+            # Arm/extend hysteresis latch for 3 minutes
+            self._glare_shield_until = now_mono + self.glare_hold_s
             self.curtain.command("GLARE_SHIELD")  # Lower curtain 40% to shield overhead glare
             self.led_duty = max(0.0, self.led_duty - LED_STEP_PCT * 2)
         elif class_id == 3:      # TEXT_NECK_TOO_CLOSE (< 28 cm)
@@ -848,10 +866,12 @@ class Gateway:
             servo = SERVO_NUDGE_DEG
             self.alerts.notify(class_id, "Posture Alert", "Slouching too far back! Align your spine upright.")
         elif class_id == 5:      # BREAK_TIMER_REACHED (>= 50 min)
+            self._glare_shield_until = None
             self.curtain.command("CLOSED")  # Complete physical barrier for break
             servo = SERVO_BREAK_DEG
             self.alerts.notify(class_id, "Break Required", "50-minute study interval reached. Take a 5-minute break!")
         elif class_id == 6:      # AWAY (unseated)
+            self._glare_shield_until = None
             self.curtain.command("OPEN")
             self.led_duty = 0.0
         elif class_id == 7:      # NOISY_ENVIRONMENT (> 68 dB)
