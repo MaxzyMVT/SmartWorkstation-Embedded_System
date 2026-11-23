@@ -106,9 +106,15 @@ Monitors ambient noise and study surface lighting directly on the desk reading p
 | | **AO** | **GPIO 35** | Analog Audio Signal | ADC1 channel 7 (50ms Peak-to-Peak windowing) |
 | | **DO** | *(Unused)* | Digital Threshold | Do not connect |
 
-### Physical Placement Strategy
-- **BH1750 (with white dome cover)**: Mount on the **rear-center desk reading plane pointing straight UP towards the ceiling / workstation LED light bar**. The dome acts as a cosine diffuser capturing light across a $180^\circ$ hemisphere (target: 500 Lux according to EN 12464-1).
-- **KY-037 Sound Sensor**: Mount on the side or rear upright wall, isolated from direct vibrations of the stepper motor.
+### Physical Placement Strategy (Engineering Spatial Isolation)
+- **Inner Back (ผนังในด้านหลัง)**:
+  - **BH1750 (with white dome cover)**: Mount on the **inner back wall** facing forward/downward toward the desk reading plane. Captures reflected desk illuminance (1–65,535 Lux) and continues reading accurately even when the front glare curtain is deployed.
+  - **HC-SR04 Ultrasonic Sensor**: Mount on the **inner back wall** (center, 400–450 mm above desk) pointing horizontally toward the user's torso/chest (optimal 35–55 cm). Being on the back wall keeps its acoustic line-of-sight completely clear of the front curtain mechanism.
+- **Outer Back (ผนังนอกด้านหลัง)**:
+  - **KY-037 Sound Sensor**: Mount on the **outer back wall** facing the room. Isolates acoustic noise sampling from internal 28BYJ-48 stepper motor vibrations and enclosure resonance.
+  - **KY-001 DS18B20 Temp Sensor**: Mount on the **outer back wall** facing the room. Accurately samples ambient room temperature without being biased by trapped internal enclosure heat or user body heat.
+- **Chair (เก้าอี้)**:
+  - **FSR402 Force Sensing Resistor**: Positioned under the seat cushion connected to Node 1 (ESP32) with a 10kΩ pull-down resistor, detecting user presence and tracking cumulative study duration with FreeRTOS and Deep Sleep ISR.
 
 ---
 

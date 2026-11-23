@@ -11,13 +11,18 @@
 
 **Smart Workstation** is a modular, portable tabletop enclosure ($70 \times 50 \times 60\text{ cm}$) placed over a study/work desk. It creates an ergonomically controlled, distraction-free environment for students and desk workers.
 
-### Closed-Loop Architecture
-1. **Sensor Node 1 (Chair)**: ESP32 + FSR402 Force Sensing Resistor (seat pressure mat). Detects seating presence, monitors cumulative study time, and features deep sleep with GPIO 33 interrupt wake-up.
-2. **Sensor Node 2 (Desk Surface)**: ESP32 + KY-037 sound sensor + BH1750 digital ambient light sensor (I2C). Monitors acoustic noise and precise desk illumination (1–65535 Lux).
-3. **Gateway (Front Arch / Desk)**: Raspberry Pi 4 + HC-SR04 ultrasonic distance sensor + KY-001 DS18B20 1-Wire temperature sensor.
-4. **Actuators (Closed-Loop)**:
-   - **Motorized Blocker Curtain**: 28BYJ-48 Stepper motor + ULN2003 driver with M7 software bounds. Automatically lowers to enforce break time or shield against severe noise / drafts; opens when normal conditions resume.
-   - **Adaptive Task Lighting**: High-CRI 5V LED lamp driven by PWM MOSFET (proportional feedback maintaining optimal desk illumination).
+### Closed-Loop Architecture & Spatial Layout
+1. **Sensor Node 1 (Chair)**: ESP32 DevKit V1 + FSR402 Force Sensing Resistor (seat pressure mat with 10kΩ pull-down). Detects seating presence, monitors cumulative study time, and features FreeRTOS Deep Sleep with GPIO 33 interrupt wake-up (E1–E3).
+2. **Inner Back Wall (Inside Enclosure)**:
+   - **HC-SR04 Ultrasonic Distance Sensor**: Mounted on the inner back wall (400–450 mm above desk) pointing horizontally toward user chest/head (35–55 cm posture monitoring; line-of-sight unaffected by front curtain).
+   - **BH1750 Digital Ambient Light Sensor (I2C)**: Mounted on the inner back wall angled toward the desk reading surface (1–65535 Lux; monitors task illuminance continuously even when the front glare curtain is deployed).
+3. **Outer Back Wall (Outside Enclosure)**:
+   - **KY-037 Sound Sensor**: Mounted on the outer back wall to sample ambient room noise without interference from the 28BYJ-48 stepper motor's internal vibration and resonance.
+   - **KY-001 DS18B20 1-Wire Digital Temperature Sensor**: Mounted on the outer back wall to sample true ambient room temperature without being biased by enclosed trapped heat or user body heat.
+4. **Gateway (Side Enclosure Wall)**: Raspberry Pi 4 Model B running central daemon, on-device Random Forest AI, M5 cloud persistence, and M6 alerts.
+5. **Actuators (Closed-Loop)**:
+   - **Motorized Blocker Curtain**: 28BYJ-48 Stepper motor + ULN2003 driver with M7 software bounds. Automatically lowers to enforce break time or shield against harsh glare (Class 2 with 3-minute hysteresis hold) and severe noise; opens when normal conditions resume.
+   - **Adaptive Task Lighting**: High-CRI 5V LED lamp driven by 1000 Hz hardware PWM (proportional feedback maintaining optimal 450–550 Lux).
 5. **On-Device AI Engine**: Scikit-Learn multi-class model (`RandomForestClassifier`, 6 inputs, 9 states, inference $<10\text{ ms}$) processing posture and environmental data in real time to trigger closed-loop actions.
 6. **Cloud & Dashboard**: MQTT over TLS $\rightarrow$ Cloud broker & storage $\rightarrow$ React Web Dashboard (`Interface/`) + Automated Webhook notifications (Discord / LINE).
 
