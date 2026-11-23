@@ -19,7 +19,7 @@ Feature Vector (6 Features):
 Classes:
     0: OPTIMAL_STUDY        - Posture (35-55cm) and lighting (350-700 Lux) are ergonomic
     1: LOW_LIGHT            - Lux < 300 Lux (Workspace too dim; boost LED to 100%)
-    2: HARSH_GLARE          - Lux > 750 Lux (Excess ambient glare; lower curtain shield to 40%, turn off LED)
+    2: HARSH_GLARE          - Lux > 750 Lux (Excess ambient glare; lower curtain shield to 17cm / 47%, turn off LED)
     3: TEXT_NECK_TOO_CLOSE  - Distance < 28cm (Head too close to book/screen; posture warning)
     4: SLOUCH_TOO_FAR       - Distance > 65cm while seated (Slouching excessively backward)
     5: BREAK_TIMER_REACHED  - Duration >= 50 min (Prolonged study; close curtain 100% for break)
@@ -71,8 +71,8 @@ CLASS_DEFINITIONS = {
     },
     2: {
         "name": "HARSH_GLARE",
-        "action": "Curtain GLARE_SHIELD (40%); Turn OFF LED (0%) to eliminate glare",
-        "advice": "Harsh ambient glare (>750 Lux). Lowering curtain glare shield to 40%.",
+        "action": "Curtain GLARE_SHIELD (17 cm / 47%); Turn OFF LED (0%) to eliminate glare",
+        "advice": "Harsh ambient glare (>750 Lux). Lowering curtain glare shield to 17 cm.",
     },
     3: {
         "name": "TEXT_NECK_TOO_CLOSE",

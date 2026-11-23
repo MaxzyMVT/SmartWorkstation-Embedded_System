@@ -51,7 +51,14 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("paho-mqtt (>=2.0) is required: pip install -r requirements.txt") from exc
 
-from hardware_interface import CURTAIN_TRAVEL_STEPS, BaseHardware, create_hardware
+from hardware_interface import (
+    CURTAIN_CLOSED_CM,
+    CURTAIN_GLARE_CM,
+    CURTAIN_GLARE_RATIO,
+    CURTAIN_TRAVEL_STEPS,
+    BaseHardware,
+    create_hardware,
+)
 from train_ai_model import CLASS_INFO, FEATURE_NAMES, MODEL_PATH, train_and_save
 
 log = logging.getLogger("gateway")
@@ -262,8 +269,8 @@ class SmartWorkstationAI:
 class CurtainController(threading.Thread):
     TARGET_STEPS = {
         "OPEN": 0,
-        "GLARE_SHIELD": int(CURTAIN_TRAVEL_STEPS * 0.40),
-        "CLOSED": CURTAIN_TRAVEL_STEPS,
+        "GLARE_SHIELD": int(CURTAIN_TRAVEL_STEPS * CURTAIN_GLARE_RATIO),  # 17 cm from axis (~47.2%)
+        "CLOSED": CURTAIN_TRAVEL_STEPS,                                  # 36 cm from axis (100%)
     }
 
     def __init__(self, hw: BaseHardware, step_delay: float) -> None:
@@ -296,7 +303,11 @@ class CurtainController(threading.Thread):
             self.hw.release_stepper()
             self.position = 0
             self._settled = self.state = "OPEN"
-            log.info("Curtain initialized at 0 (OPEN) [M7: Software step bounds 0..%d active]", CURTAIN_TRAVEL_STEPS)
+            log.info(
+                "Curtain initialized at 0 (OPEN) [M7: Software step bounds 0..%d (36 cm), Glare Shield: %d (17 cm) active]",
+                CURTAIN_TRAVEL_STEPS,
+                self.TARGET_STEPS["GLARE_SHIELD"],
+            )
             return
 
         for _ in range(CURTAIN_TRAVEL_STEPS + 400):
@@ -857,7 +868,7 @@ class Gateway:
         elif class_id == 2:      # HARSH_GLARE (> 750 Lux)
             # Arm/extend hysteresis latch for 3 minutes
             self._glare_shield_until = now_mono + self.glare_hold_s
-            self.curtain.command("GLARE_SHIELD")  # Lower curtain 40% to shield overhead glare
+            self.curtain.command("GLARE_SHIELD")  # Lower curtain to 17 cm glare shield (47.2%)
             self.led_duty = max(0.0, self.led_duty - LED_STEP_PCT * 2)
         elif class_id == 3:      # TEXT_NECK_TOO_CLOSE (< 28 cm)
             servo = SERVO_NUDGE_DEG

@@ -45,6 +45,9 @@ STEP_SEQUENCE: List[List[int]] = [
 ]
 
 CURTAIN_TRAVEL_STEPS: int = int(os.getenv("CURTAIN_TRAVEL_STEPS", "4096"))
+CURTAIN_CLOSED_CM: float = float(os.getenv("CURTAIN_CLOSED_CM", "36.0"))
+CURTAIN_GLARE_CM: float = float(os.getenv("CURTAIN_GLARE_CM", "17.0"))
+CURTAIN_GLARE_RATIO: float = (CURTAIN_GLARE_CM / CURTAIN_CLOSED_CM) if CURTAIN_CLOSED_CM > 0 else (17.0 / 36.0)
 
 # Check for RPi.GPIO availability
 _CAN_IMPORT_RPI = False
