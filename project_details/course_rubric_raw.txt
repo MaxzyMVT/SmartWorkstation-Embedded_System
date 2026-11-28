@@ -1,5 +1,10 @@
-﻿Embedded System (CEDT)
+Embedded System (CEDT)
 Final Project 2026: Smart Devices
+Update 28 Nov 2026: what each group must do before presenting
+1. Book one presentation slot for your group in the presentation booking sheet: Mon 30 Nov 11:00–13:00 (one room, for groups that are ready) or Tue 8 Dec 09:00–12:00 (three rooms). See 4.5.
+2. Answer the self-assessment (questions 16–60) in the "Embedded System Final Project" assignment on MyCourseVille by 23:59 the night before your slot. See 4.7.
+3. Submit slides, report, video link and source code on MyCourseVille by 23:59 on Tue 8 Dec (no penalty until 06:00 on Wed 9 Dec), whichever day you present. See 4.5.
+4. Every member submits "Final Project Peer Evaluation (รายบุคคล)" on MyCourseVille by 06:00 on Wed 9 Dec.
 1 Objectives
 In the final project, you will apply your knowledge of embedded systems, your creativity and your project-management skills to build a smart device. You will use microcontrollers (ESP32 or similar) to read data from sensors and drive actuators, pass that data from a sensor node to a gateway, connect to the Internet and the cloud, and use AI to make decisions that control the device.
 This year, the project puts more weight on embedded engineering quality (how well the firmware is designed, how reliable the communication is, and how well you measure the system's real performance) rather than on how many features you add.
@@ -58,7 +63,7 @@ Every project must meet all of the following. These items carry no points; inste
 4.3 Safety rules
 * Mains voltage (220 V AC) may be switched only through an enclosed, certified relay/SSR module or smart plug. No exposed mains wiring. Any device that uses mains voltage must be checked by a TA or instructor before the demo.
 * Keep liquids (pumps, water tanks) physically separated from electronics, and use a tray or enclosure to catch spills.
-* Lithium batteries must have a protection circuit and must not be left charging unattended.
+* Lithium batteries must have a protection circuit and must not be left charging unattended. Commercial power banks are allowed; note that many switch off automatically when the load current is low (e.g. a node in deep sleep).
 * Moving parts (motors, doors, locks) must have a way to stop safely (limit switch, timeout or manual stop).
 4.4 Milestones
 Date
@@ -76,24 +81,31 @@ Date
 	Fri 20 Nov 2026
 	Checkpoint video
 	Progress video (≤2 min) submitted on MyCourseVille, showing data flowing end to end: sensor node → gateway → cloud → dashboard
-	Tue 8 Dec 2026
+	Mon 30 Nov or Tue 8 Dec 2026
 	Final presentation and demo
-	See 4.5
+	See 4.5 and 4.7
 	
 
 Milestone deadlines are at 23:59 on the date shown. A milestone that is missing or more than 24 hours late deducts 2 points from the total. You may change parts of your proposal later (e.g. switch to another model of the same sensor type) without penalty; update the BOM and explain the change in the report.
 4.5 Final submission
-On Tuesday 8 December 2026, each group presents for 10 minutes (including a live demo), followed by Q&A. Book your presentation slot in the booking sheet (link will be announced on MyCourseVille). Bring your own mobile hotspot, because the university Wi-Fi often does not work with ESP32 boards. If the live demo fails, you may show a backup video, but the Demonstration score will be lower.
-Submit the following on MyCourseVille by 23:59 on Tuesday 8 December 2026 (no penalty for submissions received by 06:00 on Wednesday 9 December 2026; after that, 5 points are deducted from the total for each additional day or part of a day late):
+Each group presents in one 10-minute slot: about 7 minutes of presentation and live demo, then about 3 minutes of Q&A. There are two presentation days: Monday 30 November 2026, 11:00–13:00 (one room, for groups that are ready early), and Tuesday 8 December 2026, 09:00–12:00 (three rooms in parallel). Book one slot per group in the presentation booking sheet (sign in with your @chula.ac.th account; every edit is logged); slots are first come, first served. Be at the room 10 minutes before your slot, and submit the self-assessment (Section 4.7) before it. Bring your own mobile hotspot, because the university Wi-Fi often does not work with ESP32 boards. If the live demo fails, you may show a backup video, but the Demonstration score will be lower.
+Submit the following on MyCourseVille by 23:59 on Tuesday 8 December 2026, whichever day you present (no penalty for submissions received by 06:00 on Wednesday 9 December 2026; after that, 5 points are deducted from the total for each additional day or part of a day late):
 1. Presentation slides.
 2. Final report (PDF), at most 10 pages, excluding cover page, table of contents, preface, references and appendix. English or Thai.
 3. Video (3–5 minutes) uploaded to YouTube, Facebook, TikTok or similar, with the link.
 4. Source code: an archive of the source code plus the link to your Git repository. The repository must be accessible from the Internet. Do not commit Wi-Fi passwords, API keys or tokens.
-5. Peer evaluation: each member submits individually (form on MyCourseVille).
+5. Peer evaluation: each member submits individually ("Final Project Peer Evaluation (รายบุคคล)" assignment on MyCourseVille), due 06:00 on Wednesday 9 December 2026.
 4.6 AI tools and academic integrity
 * You may use AI coding tools (e.g. ChatGPT, Claude, GitHub Copilot). Declare clearly in the report which tools you used and for which parts of the system.
 * Every member must be able to explain the code and design of their own part. Code that you cannot explain during Q&A may receive no credit.
 * Code, libraries or designs from other people, including previous years' projects, must be cited in the report and the repository. Submitting another group's work as your own is not allowed.
+4.7 Self-assessment before the presentation
+Before your presentation, your group scores itself against the marking guide in Section 5 by answering questions 16–60 of the "Embedded System Final Project" assignment on MyCourseVille.
+* Deadline: 23:59 on the night before your presentation slot.
+* The examiner uses your self-assessment as the starting point, then keeps or adjusts each score after your presentation and Q&A.
+* Give evidence for every score you claim: a file or line in the Git repository, a time in the video, or a measured value. Scores without evidence will be lowered.
+* You may update the answers for Video and Documentation (VI) until 06:00 on Wednesday 9 December 2026. Presentation (V) is scored by the examiner only.
+* Peer evaluation is a separate individual assignment, "Final Project Peer Evaluation (รายบุคคล)", due 06:00 on Wednesday 9 December 2026.
 5 Marking Guide (70 points)
 I. Problem Definition (5 points)
 * Relevance and Impact (3 points): Clearly describes a real-world problem affecting a significant group of people and justifies its urgency. The problem is well-defined and appropriately scoped for an embedded systems project.
@@ -117,7 +129,7 @@ Choose items from the menu below. Each item is worth 2 points (1 point if it onl
 	At least one input handled by an ISR with deferred processing (no busy polling)
 	E3
 	Low power
-	Deep/light sleep with measured current consumption and an estimated battery life
+	Deep/light sleep with measured current consumption and an estimated battery life. Measuring the current of each operating state (e.g. sleep, sensing, transmitting) once on one battery-powered node and estimating battery life from the duty cycle with stated assumptions is enough; continuous logging is not required
 	E4
 	Reliable communication
 	Acknowledgement/retry between node and gateway, and store-and-forward (buffering) when the Internet or cloud is down
@@ -157,7 +169,7 @@ III. Implementation (20 points)
    * 3: intuitive and attractive; requires minimal instruction; alerts are clear and useful.
 IV. Testing and Analysis (10 points)
 * Test Plan and Procedure (3 points): Documented test procedures that cover normal use, edge cases and failure conditions (e.g. Wi-Fi loss, sensor unplugged, power loss). 1: some cases tested; 2: normal use and edge cases; 3: also failure conditions, with documented steps and results.
-* Quantitative Metrics (4 points): Measure at least 3 of the following with real data, stating how you measured each one: end-to-end latency (sensor → dashboard or sensor → actuator), packet delivery rate between node and gateway, sensor accuracy compared with a reference instrument, power consumption or battery life, AI accuracy (or precision/recall) on your own test data, uptime over a continuous run. Scoring: 1 point per metric measured with real data and a stated method (up to 3), plus 1 point when measurements are repeated and reported with their variation (e.g. mean and min/max).
+* Quantitative Metrics (4 points): Measure at least 3 of the following with real data, stating how you measured each one: end-to-end latency (sensor → dashboard or sensor → actuator), packet delivery rate between node and gateway, sensor accuracy compared with a reference instrument, power consumption or battery life, AI accuracy (or precision/recall) on your own test data, uptime over a continuous run. For power consumption or battery life, measuring the current of each operating state on one representative battery-powered node and estimating from the duty cycle is acceptable (see E3). Scoring: 1 point per metric measured with real data and a stated method (up to 3), plus 1 point when measurements are repeated and reported with their variation (e.g. mean and min/max).
 * Analysis and Comparison (3 points): Results are analyzed and compared against your project objectives and against existing similar products or systems. 1: compared with your objectives; 2: also compared with existing systems; 3: both, using your measured metrics.
 V. Presentation (10 points)
 The presenter may be chosen at random by the examiner, so every member must prepare.
@@ -196,8 +208,12 @@ Date
 	Proposal due
 	Fri 20 Nov 2026
 	Checkpoint progress video (end-to-end data flow)
+	23:59 the night before your slot
+	Self-assessment due on MyCourseVille (Section 4.7)
+	Mon 30 Nov 2026, 11:00–13:00
+	Early presentation (one room, for groups that are ready)
 	Tue 8 Dec 2026
-	Final presentation; all submissions due 23:59
+	Final presentation, 09:00–12:00 (three rooms); all submissions due 23:59
 	Wed 9 Dec 2026, 06:00
 	Grace period ends; −5 points per day late after this
 	
@@ -270,4 +286,14 @@ Run บน gateway ได้เลยครับ ถ้า gateway เป็น
 
 
 13. กลุ่มผมมีชิ้นงาน 2 ชิ้น ชิ้นหนึ่งมี actuator อีกชิ้น ไม่มี แบบนี้ถือว่า ตรงตาม requirement ได้ไหมครับ
-ผ่าน M2 ครับ เพราะกำหนดอย่างน้อย 1 actuator ต่อทั้งโปรเจกต์ แต่ทั้ง 2 ชิ้นต้องเป็นส่วนหนึ่งของระบบเดียวกัน (sensor node ↔ gateway) และ actuator ต้องถูกสั่งงานจากระบบ เช่น จากข้อมูลหรือการตัดสินใจของ AI ส่วน M1 ยังต้องมี sensor ≥2 type ที่ node และ ≥2 type ที่ gateway เหมือนเดิม (ดู M2 ในหัวข้อ 4.1)
+ผ่าน M2 ครับ เพราะกำหนดอย่างน้อย 1 actuator ต่อทั้งโปรเจกต์ แต่ทั้ง 2 ชิ้นต้องเป็นส่วนหนึ่งของระบบเดียวกัน (sensor node ↔ gateway) และ actuator ต้องถูกสั่งงานจากระบบ เช่น จากข้อมูลหรือการตัดสินใจของ AI ส่วน M1 ยังต้องมี sensor ≥2 type ที่ node และ ≥2 type ที่ gateway เหมือนเดิม (ดู M2 ในหัวข้อ 4.1) 
+
+
+14. ในส่วนของการจ่ายไฟ สามารถใช้พาวเวอร์แบงก์ได้หรือเปล่าคะ (หรือใช้ได้แค่แบตเตอร์รี่ก้อนเหรอคะ)
+ใช้ power bank ได้ (มีวงจรป้องกันอยู่แล้ว ตรงตามหัวข้อ 4.3) แต่ระวัง power bank หลายรุ่นตัดไฟเองเมื่อกระแสต่ำ เช่น ตอน node อยู่ใน deep sleep ทำให้บอร์ดดับ ให้ทดสอบก่อนหรือเลือกรุ่นที่มีโหมดกระแสต่ำ (low-current/always-on) ถ้าใช้ power bank คำนวณ battery life ให้คิดความจุที่ใช้ได้จริงประมาณ 60–70% ของค่าที่ระบุ เพราะมีการแปลงแรงดัน
+
+
+
+
+15. E3 Low power และ IV. Testing and Analysis - Quantitative Metrics - power consumption or battery life การวัดกระแสและประมาณ Battery life ต้องวัดค่าตลอดการใช้งานหรือสามารถวัดได้ครั้งเดียว แล้วเอามาประมาณค่าตาม Assumption ที่มี และจำเป็นต้องวัดทุก node หรืออย่างน้อย 1 node ก็พอ
+วัดครั้งเดียวต่อสถานะได้ครับ ไม่ต้องวัดตลอดการใช้งาน ให้วัดกระแสของแต่ละสถานะ (เช่น deep sleep, ตื่นอ่าน sensor, ส่งข้อมูล) พร้อมระยะเวลาของแต่ละสถานะ แล้วคำนวณกระแสเฉลี่ยตาม duty cycle จากนั้นประมาณ battery life = ความจุแบต × 0.7–0.8 ÷ กระแสเฉลี่ย และระบุ assumption ให้ชัด (รอบการอ่าน/ส่งข้อมูล ความจุแบต ประสิทธิภาพของ regulator) วัดอย่างน้อย 1 node ที่ใช้แบตและใช้ sleep ก็พอ ถ้า node อื่นใช้ฮาร์ดแวร์และ firmware เดียวกันให้ระบุว่าใช้ค่าเดียวกัน ส่วน gateway ที่ใช้ไฟบ้านไม่ต้องวัด เครื่องมือใช้ multimeter ต่ออนุกรม, INA219/INA226 หรือ USB power meter ได้ แต่ USB meter ส่วนใหญ่วัดกระแสระดับ µA ตอน deep sleep ไม่ได้ ให้ใช้ multimeter ย่าน µA/mA สำหรับสถานะนั้น สำหรับ Quantitative Metrics ใช้ผลชุดเดียวกันได้ ถ้าวัดซ้ำหลายครั้งและรายงานค่าเฉลี่ยกับ min/max จะได้ +1 ตามเกณฑ์ (ดู E3 ในหัวข้อ II′ และ Quantitative Metrics ในหัวข้อ IV)
